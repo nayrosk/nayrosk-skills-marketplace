@@ -26,10 +26,54 @@ value.
 | Podman version | `podman --version` | version `>= 5.0` | **ABORT** — name the found version and the required minimum (5.0) |
 | Rootless id mappings | `podman info --format '{{.Host.IDMappings.UIDMap}}'` | a non-empty mapping | **ABORT** — subuid/subgid are not configured for this user |
 | Linger | `loginctl show-user "$USER" -p Linger` | `Linger=yes` | **ASK** before running `loginctl enable-linger "$USER"`; without linger the service stops when the user logs out |
-| Quadlet unit dir | `ls -d "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"` | directory exists and is writable | not an abort — **CREATE** it with `mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"` and continue |
+| Quadlet unit dir | see "Unit directory writability" below | directory (or its parent, if not yet created) is writable | not an abort — **CREATE** with `mkdir -p` when missing; **ABORT** if the writability probe fails |
 | Quadlet generator | `scripts/find-quadlet.sh` (from the skill directory) | prints an absolute path on stdout, exit 0 | **ABORT** — exit 1 means neither `.container` generation nor linting is possible; report the script's stderr diagnostic |
-| systemd user manager | `systemctl --user is-system-running` | `running` or `degraded` | **ABORT** if the command errors or the user manager is unreachable; `degraded` alone is not an abort (an unrelated unit may be failed) — only treat unreachability/errors as fatal |
+| systemd user manager | see "systemd user manager" below | stdout is exactly `running` or `degraded` | **ABORT** — stdout is anything else, including empty (a connection failure to the user bus) |
 | Free space | `df -h --output=avail "$HOME" \| tail -1` | enough free space for the image and its data | **WARN** and ask the operator whether to continue if space looks insufficient for the service being installed |
+
+## Unit directory writability
+
+`ls -d` only proves the directory exists; it says nothing about whether it
+can be written to, and the workflow needs to write `.container` files into
+it. Probe writability directly, checking the parent directory instead when
+the unit directory itself does not exist yet (it will be created there):
+
+```bash
+dir="${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
+if [ -d "$dir" ]; then
+  test -w "$dir" && echo "writable: $dir" || echo "ABORT: not writable: $dir"
+else
+  parent="$(dirname "$dir")"
+  test -w "$parent" && echo "CREATE: $dir (parent writable)" || echo "ABORT: parent not writable: $parent"
+fi
+```
+
+If the directory exists, `test -w "$dir"` must succeed. If it does not
+exist yet, `test -w` on its parent must succeed before `mkdir -p` is run;
+a read-only parent is a real failure worth catching here rather than
+during installation.
+
+## systemd user manager
+
+`systemctl --user is-system-running` exits 1 for both `degraded` (harmless
+— some unrelated user unit has failed) and for a genuinely unreachable
+user bus, so the exit status alone cannot distinguish an acceptable system
+from a broken one. Make the decision on stdout content instead:
+
+```bash
+state="$(systemctl --user is-system-running 2>/dev/null)"
+case "$state" in
+  running|degraded) : ;;  # PASS
+  *) : ;;                 # ABORT — includes a connection failure, where $state is empty
+esac
+```
+
+- `state` is `running` or `degraded` → pass, continue preflight.
+- `state` is anything else, including empty (which happens when the user
+  bus cannot be reached — `systemctl` then prints nothing to stdout and a
+  diagnostic such as `Failed to connect to user scope bus...` to stderr) →
+  **ABORT**, naming the unexpected state (or "user bus unreachable" when
+  `state` is empty) and, if available, the stderr diagnostic.
 
 ## Notes on interpreting results
 
