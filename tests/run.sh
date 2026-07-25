@@ -15,6 +15,14 @@ render() { # render <fixture> -> prints rendered path
   local src="$1" dir="$RENDERED/$(basename "$1" .container)"
   mkdir -p "$dir"
   sed "s|@HOME@|$HOME|g" "$src" > "$dir/fixture.container"
+  # A fixture may ship a sibling Quadlet unit (e.g. <name>.network) that the
+  # .container references. It is rendered next to it under the same
+  # "fixture" basename, because validate.sh resolves such references
+  # relative to the unit under test.
+  local sib
+  for sib in "${src%.container}".network "${src%.container}".volume; do
+    [ -f "$sib" ] && sed "s|@HOME@|$HOME|g" "$sib" > "$dir/fixture.${sib##*.}"
+  done
   echo "$dir/fixture.container"
 }
 
@@ -69,6 +77,13 @@ check "latest-slim tag is not falsely rejected (R1)" 0 "$VALIDATE" "$(render "$H
 check "NO-HEALTHCHECK exemption is honoured (R5)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-no-healthcheck.container")"
 check "CRLF line endings are not falsely rejected" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-crlf.container")"
 check "a tilde in a prose Description= is not a path (R11)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-prose-tilde.container")"
+# Regression: a unit whose Network= names a sibling .network unit must not be
+# failed by the LINT guard. The Quadlet generator resolves such references
+# against QUADLET_UNIT_DIRS and aborts with "requested Quadlet unit
+# <x>.network was not found" if the sibling is absent, so linting the
+# .container in isolation used to reject every `internal` placement this
+# skill itself generates.
+check "a referenced sibling .network unit is resolved, not a LINT failure" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-network-ref.container")"
 
 for f in "$HERE"/fixtures/violation-*.container; do
   rule="$(basename "$f" | sed -E 's/^violation-(r[0-9]+)-.*/\1/' | tr 'a-z' 'A-Z')"
@@ -86,6 +101,19 @@ if [ "$lint_rc" -eq 1 ] && echo "$lint_out" | grep -q '^LINT:'; then
 else
   echo "FAIL lint-bogus-key.container: exit $lint_rc, expected 1 with a LINT: line"
   echo "$lint_out" | sed 's/^/    /'
+  fails=$((fails+1))
+fi
+
+# The mirror image of the sibling-resolution regression above: a reference to
+# a .network unit that does NOT exist anywhere must still be caught, so the
+# fix cannot have blanket-disabled the generator's cross-reference check.
+miss_rendered="$(render "$HERE/fixtures/lint-missing-network.container")"
+miss_out="$("$VALIDATE" "$miss_rendered" 2>&1)"; miss_rc=$?
+if [ "$miss_rc" -eq 1 ] && echo "$miss_out" | grep -q '^LINT:'; then
+  echo "PASS lint-missing-network.container -> LINT"
+else
+  echo "FAIL lint-missing-network.container: exit $miss_rc, expected 1 with a LINT: line"
+  echo "$miss_out" | sed 's/^/    /'
   fails=$((fails+1))
 fi
 

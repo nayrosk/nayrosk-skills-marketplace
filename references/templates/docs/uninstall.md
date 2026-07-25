@@ -9,7 +9,15 @@ systemctl --user stop <SERVICE_NAME>
 systemctl --user disable <SERVICE_NAME> 2>/dev/null || true
 rm "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/<SERVICE_NAME>.container"
 systemctl --user daemon-reload
+
+# One line per secret this service actually created (R4). Delete this line
+# when the service declared no Secret= at all - `podman secret rm` on a
+# name that was never created exits non-zero and aborts a `set -e` script.
 podman secret rm <SECRET_NAME>
+
+# Untag the pinned image. This frees the image only if no other tag or
+# container still references it; when it does, podman prints `Untagged:`
+# and keeps the layers, which is the correct, non-destructive outcome.
 podman rmi <REGISTRY>/<IMAGE>:<TAG>
 ```
 

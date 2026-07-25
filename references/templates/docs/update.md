@@ -36,7 +36,7 @@ systemctl --user restart <SERVICE_NAME>
 #    slow to start can report unhealthy on the very first call right after
 #    a restart even though it would pass a few seconds later. Poll instead
 #    of probing once: at most 20 times, 5s apart, the same bound the
-#    install workflow uses - and fail loudly with the container logs on
+#    install workflow uses - and fail loudly with the service log on
 #    timeout rather than silently declaring the update done.
 healthy=0
 for i in $(seq 1 20); do
@@ -47,7 +47,11 @@ if [ "$healthy" -eq 1 ]; then
   echo "healthy"
 else
   echo "TIMEOUT: <SERVICE_NAME> did not become healthy after the update" >&2
-  podman logs <SERVICE_NAME>
+  # NOT `podman logs <SERVICE_NAME>`: the Quadlet-generated ExecStart runs
+  # `podman run --rm` and ExecStopPost runs `podman rm -f`, so a container
+  # that failed to start no longer exists and `podman logs` prints only
+  # "no such container" - precisely when its output is needed.
+  journalctl --user -u <SERVICE_NAME> --no-pager -n 100
   echo "See the Rollback section below." >&2
 fi
 systemctl --user status <SERVICE_NAME> --no-pager

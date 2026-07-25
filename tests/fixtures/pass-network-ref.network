@@ -1,0 +1,6 @@
+[Unit]
+Description=fixture internal network
+
+[Network]
+NetworkName=fixture
+NetworkDeleteOnStop=true

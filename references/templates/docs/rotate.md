@@ -16,8 +16,10 @@ systemctl --user restart <SERVICE_NAME>
 # the check immediately and does not wait out HealthStartPeriod= on its
 # own, so a single call right after a restart can misreport a service that
 # is merely slow to start. Same bound as update.md and the install
-# workflow: at most 20 times, 5s apart, failing loudly with the container
-# logs on timeout.
+# workflow: at most 20 times, 5s apart, failing loudly with the service log
+# on timeout. Use journalctl, not `podman logs`: the generated unit runs
+# `podman run --rm`, so a container that failed to start is already gone and
+# `podman logs` prints only "no such container".
 healthy=0
 for i in $(seq 1 20); do
   podman healthcheck run <SERVICE_NAME> >/dev/null 2>&1 && { healthy=1; break; }
@@ -27,7 +29,7 @@ if [ "$healthy" -eq 1 ]; then
   echo "healthy"
 else
   echo "TIMEOUT: <SERVICE_NAME> did not become healthy after rotation" >&2
-  podman logs <SERVICE_NAME>
+  journalctl --user -u <SERVICE_NAME> --no-pager -n 100
 fi
 ```
 

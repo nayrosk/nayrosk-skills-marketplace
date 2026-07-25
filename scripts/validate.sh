@@ -298,12 +298,31 @@ done <<< "$(get_all EnvironmentFile Container)"
 # QUADLET_UNIT_DIRS is the only way to point it at a specific directory.
 if quadlet_bin="$("$HERE/find-quadlet.sh" 2>/dev/null)"; then
   tmp="$(mktemp -d)"; cp "$unit" "$tmp/"
+  # A unit may reference sibling Quadlet units by filename - most commonly
+  # `Network=<name>.network`, which is exactly what this skill's `internal`
+  # placement generates. The generator resolves those references against
+  # QUADLET_UNIT_DIRS, so linting the .container alone makes it abort with
+  # `requested Quadlet unit <x>.network was not found` - a false LINT
+  # failure on a perfectly conformant pair. Copy in only the siblings this
+  # unit actually names (never the whole directory, which would drag
+  # unrelated units' errors into this unit's result).
+  unit_dir="$(cd "$(dirname "$unit")" && pwd)"
+  while IFS= read -r ref; do
+    [ -z "$ref" ] && continue
+    [ "$ref" = "$(basename "$unit")" ] && continue
+    [ -f "$unit_dir/$ref" ] && cp "$unit_dir/$ref" "$tmp/"
+  done <<< "$(printf '%s\n' "$norm" | awk -F'\t' '{print $3}' \
+    | grep -oE '[A-Za-z0-9_.@-]+\.(network|volume|pod|image|build|kube)\b' | sort -u)"
   lint_out="$(QUADLET_UNIT_DIRS="$tmp" "$quadlet_bin" -dryrun -user 2>&1)"
   if ! echo "$lint_out" | grep -q 'Loading source unit file'; then
     fail LINT "quadlet -dryrun parsed no unit file - the lint did not run"
   elif echo "$lint_out" | grep -qiE 'unsupported key|error'; then
     fail LINT "quadlet -dryrun reported errors"
-    echo "$lint_out" | grep -iE 'unsupported key|error' | sed 's/^/    /'
+    # Report the generator's own per-unit diagnostics too, not just its
+    # final "processing encountered some errors" summary: the summary names
+    # no cause, and grepping for `error` alone misses lines like
+    # `converting "x.container": requested Quadlet unit ... was not found`.
+    echo "$lint_out" | grep -iE 'unsupported key|error|^[^ ]*: converting |converting "' | sed 's/^/    /'
   fi
   rm -rf "$tmp"
 else

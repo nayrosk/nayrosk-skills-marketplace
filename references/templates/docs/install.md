@@ -37,9 +37,10 @@ carries, or a compatibility constraint>
 
 ## Configuration decisions
 
-- **Network placement**: `<NETWORK>` - <which of the four exposure decisions
+- **Network placement**: `<NETWORK>` - <which of the five exposure decisions
   from `references/networking.md` applies (`public-noauth`, `public-auth`,
-  `monitoring`, `internal`), and why>.
+  `monitoring`, `loopback`, `internal`), and why>.
+  - If published on loopback: `PublishPort=127.0.0.1:<PORT>:<CONTAINER_PORT>`.
   - If routed through a reverse proxy: public hostname `<SERVICE_FQDN>`,
     container port `<CONTAINER_PORT>`.
   - If behind basic auth: username `<USERNAME>`, credential stored as a

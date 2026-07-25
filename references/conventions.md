@@ -219,6 +219,41 @@ Why: an unbounded container can starve the host of memory or exhaust its PID
 table; explicit limits keep one service's misbehavior from taking down the
 rest of the machine.
 
+### Note: `DropCapability=ALL` and images with file capabilities
+
+Not a rule, but the failure it causes is easy to misdiagnose as a broken
+image. The template's `DropCapability=ALL` empties the capability
+**bounding** set. The kernel refuses to `exec` a binary that carries
+*permitted* file capabilities when those capabilities are not in the
+bounding set, so such a container dies immediately — before any
+healthcheck ever runs — with:
+
+```
+exec container process `/usr/bin/<binary>`: Operation not permitted
+```
+
+This is common for web servers built to bind ports below 1024
+(`cap_net_bind_service=ep` on the entrypoint binary) and it happens even
+when the container is not actually asked to bind a privileged port. Check
+the image before blaming it:
+
+```bash
+podman run --rm --entrypoint /bin/sh <REGISTRY>/<IMAGE>:<TAG> \
+  -c 'getcap /usr/bin/<binary>'
+```
+
+Then add back only the capability it names, with a comment saying why:
+
+```ini
+DropCapability=ALL
+# /usr/bin/<binary> carries cap_net_bind_service=ep; an empty bounding set
+# makes exec fail with EPERM before the process starts.
+AddCapability=NET_BIND_SERVICE
+```
+
+Note the diagnosis needs `journalctl --user -u <SERVICE_NAME>`, not `podman
+logs`: the container is already removed by the time the failure is visible.
+
 ## R10 - Structured logging
 
 The application's own JSON logging option is preferred when it has one (for

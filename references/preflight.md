@@ -1,10 +1,17 @@
 # Preflight Checks
 
-This is step 0 of the workflow: **preflight runs before anything is written
-to disk.** Run every check below, in order, before creating any directory,
-template, or unit file. A failed **ABORT** check stops the workflow
-immediately — report the check by name and do not proceed to later checks
-or to installation.
+This is step 0 of the workflow: **preflight runs before any service
+artifact is written to disk.** Run every check below, in order, before
+creating any service tree, template, or unit file. A failed **ABORT** check
+stops the workflow immediately — report the check by name and do not
+proceed to later checks or to installation.
+
+The two changes marked below (creating the Quadlet unit directory, and
+enabling linger after an explicit yes) are host preconditions, not service
+artifacts, and are the only exceptions to that rule — `SKILL.md`'s "write
+nothing before the approval gate" is about the service being installed.
+Creating the unit directory may also be deferred to workflow step 6, which
+needs it anyway; probing its writability here is what matters.
 
 All checks are read-only except the two explicitly marked as making a
 change (unit directory creation, and linger enablement, which only runs

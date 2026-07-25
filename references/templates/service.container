@@ -22,14 +22,33 @@ UserNS=keep-id:uid=<CONTAINER_UID>,gid=<CONTAINER_GID>
 # R3 - non-secret configuration only, never Environment=
 EnvironmentFile=<HOME>/.<SERVICE_NAME>/.env
 
-# R4 - secrets exclusively through podman secrets
+# R4 - secrets exclusively through podman secrets.
+# OPTIONAL: one line per secret this service actually needs. DELETE this
+# line entirely when the service needs none - a leftover <SECRET_NAME>
+# placeholder makes the container fail to start.
 Secret=<SECRET_NAME>,type=env,target=<VAR_NAME>
 
-# R8 - persistent state as bind mounts on the local tree, no named volumes
+# R8 - persistent state as bind mounts on the local tree, no named volumes.
+# Keep only the mounts this service actually uses; delete the rest.
 Volume=<HOME>/.<SERVICE_NAME>/data:<CONTAINER_DATA_PATH>:Z
 Volume=<HOME>/.<SERVICE_NAME>/config:<CONTAINER_CONFIG_PATH>:ro,Z
 
+# Network placement (references/networking.md). Use ONE of:
+#   - Network=<SERVICE_NAME>.network  for the `internal` decision, or for a
+#     service that also needs a named network others can reach it on. The
+#     matching <SERVICE_NAME>.network unit must be installed alongside this
+#     file, or the Quadlet generator refuses to convert this unit.
+#   - Network=<REVERSE_PROXY_NETWORK>  for `public-noauth` / `public-auth` /
+#     `monitoring`, joining the existing proxy's network.
+#   - delete the line entirely to use Podman's default rootless network.
 Network=<NETWORK>
+
+# Published ports. Only for the `loopback` decision (and for a reverse
+# proxy's own front door). ALWAYS bind an explicit address: a bare
+# `PublishPort=<PORT>:<CONTAINER_PORT>` listens on every interface.
+# DELETE this line for the `internal` decision and for any service reached
+# only through a reverse proxy on a shared network.
+PublishPort=127.0.0.1:<PORT>:<CONTAINER_PORT>
 
 # R5 - healthcheck
 HealthCmd=<HEALTH_COMMAND>
@@ -46,7 +65,15 @@ PodmanArgs=--cpus=<CPU_LIMIT>
 # R10 - logging
 LogDriver=journald
 
-# Hardening defaults: relax only with a comment stating why
+# Hardening defaults: relax only with a comment stating why.
+# DropCapability=ALL empties the capability BOUNDING set, and the kernel
+# refuses to exec any binary carrying permitted file capabilities when they
+# are not in that set. An image whose entrypoint has file capabilities
+# therefore dies instantly with `exec container process <path>: Operation
+# not permitted` - check with
+#   podman run --rm --entrypoint /bin/sh <IMAGE> -c 'getcap <ENTRYPOINT>'
+# and add back only the capability named there, with a comment, e.g.
+#   AddCapability=NET_BIND_SERVICE
 NoNewPrivileges=true
 DropCapability=ALL
 ReadOnly=true

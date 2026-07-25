@@ -21,13 +21,21 @@ the actual installed version rather than assuming one.
 
 0. **Preflight** - run every check in `references/preflight.md`, in order.
    A failed **ABORT** check stops the workflow here, naming the check.
-   Nothing is written to disk in this step.
+   Every check is read-only except the two `references/preflight.md` marks
+   as making a change: creating the Quadlet unit directory (**CREATE**) and
+   enabling linger (**ASK**, only after an explicit yes). Both are host
+   preconditions, not service artifacts; nothing belonging to the service
+   being installed is written in this step. Creating the unit directory may
+   also be deferred to step 6, which needs it anyway.
 1. **Research** - find the newest version matching: rootless-capable,
    distroless or minimal, actively maintained. Read upstream docs for
    required capabilities, volumes, ports, environment variables and
-   secrets. Resolve the exact tag and its digest. Decide network placement
+   secrets. Resolve the exact tag and its digest - `skopeo inspect
+   docker://<REGISTRY>/<IMAGE>:<TAG>` prints the manifest `Digest`, and
+   `podman search --list-tags <REGISTRY>/<IMAGE> --format '{{.Tag}}'`
+   sorted with `sort -V` shows which tags exist. Decide network placement
    using `references/networking.md` (`public-noauth`, `public-auth`,
-   `monitoring`, or `internal`).
+   `monitoring`, `loopback`, or `internal`).
 
 > ### APPROVAL GATE - STOP HERE
 > Present to the user: image, tag, digest, why this version, required
@@ -45,10 +53,19 @@ the actual installed version rather than assuming one.
    approved.
 4. **Generate configuration** - copy `references/templates/service.container`
    (and `references/templates/service.network` when the placement is
-   `internal`), substitute the placeholders, and write `.env` from
-   `references/templates/env.template`. This is the step that creates and
-   fills `.env` - it does not exist before this point. Options must match
-   the pulled version's own docs, not assumption.
+   `internal`, or when a `loopback` service also needs a named network for
+   other containers to reach it by DNS name), substitute the placeholders,
+   and write `.env` from `references/templates/env.template`. This is the
+   step that creates and fills `.env` - it does not exist before this
+   point. Options must match the pulled version's own docs, not assumption.
+   Delete every template line that does not apply to this service rather
+   than leaving its placeholder in: an unused `Secret=` or `Volume=` line
+   left as `<SECRET_NAME>` / `<CONTAINER_DATA_PATH>` is a runtime failure,
+   not a harmless leftover. Write the unit next to where it will be
+   installed but do not install it yet - generate it under a scratch
+   directory, named exactly `<SERVICE_NAME>.container` (`validate.sh`
+   derives the expected `$HOME/.<SERVICE_NAME>` tree from that basename),
+   and copy it into the unit directory in step 6.
 4b. **Validate** - run `scripts/validate.sh <unit>`. Exit 0 prints
    `conformant`. Exit 1 prints one or more `R<n>:` and/or `LINT:` lines - a
    real conventions or generator-lint failure; **return to step 1** and
@@ -72,15 +89,29 @@ the actual installed version rather than assuming one.
 6. **Install** - place the unit(s) in
    `${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/`, then
    `systemctl --user daemon-reload`.
-7. **Enable** - `systemctl --user start <SERVICE_NAME>` and confirm it is
-   active.
+7. **Enable** - `systemctl --user start <SERVICE_NAME>`, then confirm it is
+   active. The generated unit is `Type=notify`, so `systemctl --user
+   is-active` can legitimately still print `activating` for a few seconds
+   after `start` returns; re-check rather than treating the first
+   `activating` as success. `failed`, or `activating (auto-restart)` with a
+   rising restart counter, is a crash loop - go straight to the logs below
+   instead of waiting it out.
 8. **Monitor the healthcheck** - poll at most 20 times, 5s apart (`podman
    healthcheck run` checks immediately and does not wait out
-   `HealthStartPeriod=` on its own). On timeout, fail loudly with `podman
-   logs` output and offer the rollback in
+   `HealthStartPeriod=` on its own). On timeout, fail loudly with
+   `journalctl --user -u <SERVICE_NAME>` output and offer the rollback in
    `references/templates/docs/uninstall.md`, substituting the values used
    for this install - the generated copy in `docs/` does not exist yet at
-   this point (see step 10).
+   this point (see step 10). Use `journalctl`, **not** `podman logs`:
+   Quadlet's generated `ExecStart` runs `podman run --rm` and its
+   `ExecStopPost` runs `podman rm -f`, so a container that failed to start
+   is already gone and `podman logs <SERVICE_NAME>` only reports `no such
+   container` - exactly when its output is needed most.
+
+   A container that dies immediately with `exec container process
+   <path>: Operation not permitted` is the `DropCapability=ALL` /
+   file-capability interaction, not a bad image: see
+   `references/conventions.md` R9's note on hardening defaults.
 9. **Test** - a functional probe appropriate to the service, plus
    reachability through the reverse-proxy route written in step 5, when
    one was configured.

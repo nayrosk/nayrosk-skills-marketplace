@@ -34,14 +34,30 @@ introduce a second proxy technology onto a host that already has one).
 
 ## Step 2: Exposure decision table
 
-Every service lands in exactly one of these four buckets:
+Every service lands in exactly one of these five buckets:
 
 | Decision | Meaning | How it's wired |
 |---|---|---|
 | `public-noauth` | Reachable externally, unauthenticated | Join the reverse proxy network; add the plain route |
 | `public-auth` | Reachable externally, authenticated | Join the reverse proxy network; add the route behind basic auth |
 | `monitoring` | Metrics / health endpoints | Reachable on loopback **and** on the authenticated route; **never** publicly unauthenticated |
-| `internal` | No external exposure | Dedicated `<SERVICE_NAME>.network` from `service.network`; no `PublishPort=` |
+| `loopback` | Reachable from this host only, with no proxy in front | `PublishPort=127.0.0.1:<PORT>:<CONTAINER_PORT>`; no route to write |
+| `internal` | No external exposure at all | Dedicated `<SERVICE_NAME>.network` from `service.network`; no `PublishPort=` |
+
+`loopback` is step 1's option 2, and it is a bucket of its own: it is not
+`internal` (which publishes no host port whatsoever) and it is not
+`public-*` (nothing is routed to it). It is the right answer whenever the
+operator declines a reverse proxy, and it is the **only** correct answer
+for a reverse proxy's own container — a proxy is the terminus of routing,
+so it is never routed through itself. Install the proxy as `loopback` (or,
+once it should serve the outside world, by publishing on the host's real
+addresses), and route *other* services through it.
+
+`loopback` and `internal` are also combinable, and for a reverse proxy they
+normally are: publish the proxy on loopback **and** give it a dedicated
+`<SERVICE_NAME>.network` from `service.network`, so the backends it proxies
+can join that network and be reached by container DNS name without
+publishing ports of their own. Generate both units in that case.
 
 `monitoring` is not a variant of `public-noauth` — a metrics or health
 endpoint is never handed out over the public route without authentication,
