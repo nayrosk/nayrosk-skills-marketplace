@@ -12,10 +12,23 @@ not live-reloaded).
 printf '%s' "$NEW_VALUE" | podman secret create --replace <SECRET_NAME> -
 systemctl --user restart <SERVICE_NAME>
 
-# Give the container a moment before probing - podman healthcheck run
-# executes the check immediately and does not wait out HealthStartPeriod=
-sleep 5
-podman healthcheck run <SERVICE_NAME> && echo "healthy"
+# Poll for health instead of probing once - podman healthcheck run executes
+# the check immediately and does not wait out HealthStartPeriod= on its
+# own, so a single call right after a restart can misreport a service that
+# is merely slow to start. Same bound as update.md and the install
+# workflow: at most 20 times, 5s apart, failing loudly with the container
+# logs on timeout.
+healthy=0
+for i in $(seq 1 20); do
+  podman healthcheck run <SERVICE_NAME> >/dev/null 2>&1 && { healthy=1; break; }
+  sleep 5
+done
+if [ "$healthy" -eq 1 ]; then
+  echo "healthy"
+else
+  echo "TIMEOUT: <SERVICE_NAME> did not become healthy after rotation" >&2
+  podman logs <SERVICE_NAME>
+fi
 ```
 
 If the new value is wrong, the previous secret content is not recoverable
@@ -64,7 +77,7 @@ R8 - never outside the service tree), rotate them with a user-level
 `logrotate` config rather than a system one, since this is a rootless
 install:
 
-```bash
+```conf
 # <HOME>/.<SERVICE_NAME>/logrotate.conf
 "<HOME>/.<SERVICE_NAME>/data/*.log" {
     weekly

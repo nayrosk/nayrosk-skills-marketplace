@@ -34,10 +34,22 @@ systemctl --user restart <SERVICE_NAME>
 #    immediately - it does NOT wait out HealthStartPeriod= the way the
 #    container's own background timer does, so a service that is merely
 #    slow to start can report unhealthy on the very first call right after
-#    a restart even though it would pass a few seconds later. Give it a
-#    moment, then check both the immediate probe and the aggregated status:
-sleep 5
-podman healthcheck run <SERVICE_NAME> && echo "healthy"
+#    a restart even though it would pass a few seconds later. Poll instead
+#    of probing once: at most 20 times, 5s apart, the same bound the
+#    install workflow uses - and fail loudly with the container logs on
+#    timeout rather than silently declaring the update done.
+healthy=0
+for i in $(seq 1 20); do
+  podman healthcheck run <SERVICE_NAME> >/dev/null 2>&1 && { healthy=1; break; }
+  sleep 5
+done
+if [ "$healthy" -eq 1 ]; then
+  echo "healthy"
+else
+  echo "TIMEOUT: <SERVICE_NAME> did not become healthy after the update" >&2
+  podman logs <SERVICE_NAME>
+  echo "See the Rollback section below." >&2
+fi
 systemctl --user status <SERVICE_NAME> --no-pager
 podman inspect <SERVICE_NAME> --format '{{.Config.Image}} {{.State.Health.Status}}'
 ```

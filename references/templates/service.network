@@ -6,3 +6,11 @@ Description=<SERVICE_NAME> internal network
 
 [Network]
 NetworkName=<SERVICE_NAME>
+# Stopping this unit's generated service (<SERVICE_NAME>-network.service)
+# removes the network via a generated ExecStopPost, mirroring the container
+# unit's own generated ExecStop/ExecStopPost (podman rm), which already
+# removes the container on stop without a separate manual step. Without
+# this, `podman network ls` accumulates a stranded network on every
+# uninstall, since a .network unit only creates the network on start - it
+# never deletes it on stop by default.
+NetworkDeleteOnStop=true
