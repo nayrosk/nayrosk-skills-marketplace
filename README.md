@@ -24,12 +24,25 @@ maintain it.
 
 ## Install
 
-Clone the repository anywhere, then symlink or copy it into a skills
-directory:
+### As a plugin (recommended)
+
+Claude Code clones the repository, caches it, and handles updates:
+
+```
+/plugin marketplace add nayrosk/podman-quadlet-service
+/plugin install podman-quadlet-service@podman-quadlet-service
+```
+
+### As a personal skill
+
+Clone the repository anywhere, then symlink or copy the skill directory into
+a skills directory. Note the path: the skill lives under `skills/`, not at
+the repository root.
 
 ```bash
 git clone https://github.com/nayrosk/podman-quadlet-service.git
-ln -s "$PWD/podman-quadlet-service" "$HOME/.claude/skills/podman-quadlet-service"
+ln -s "$PWD/podman-quadlet-service/skills/podman-quadlet-service" \
+      "$HOME/.claude/skills/podman-quadlet-service"
 ```
 
 ## Usage
@@ -55,16 +68,16 @@ before writing anything to disk.
 | R10 | JSON logging preferred via the application's own option; otherwise `LogDriver=` set explicitly |
 | R11 | All paths absolute and canonical - no `~`, no `%h`, no relative paths |
 
-See `references/conventions.md` for the full rationale and examples behind
+See `skills/podman-quadlet-service/references/conventions.md` for the full rationale and examples behind
 each rule.
 
 ## Standalone linter
 
-`scripts/validate.sh path/to/unit.container` checks a Quadlet unit against
+`skills/podman-quadlet-service/scripts/validate.sh path/to/unit.container` checks a Quadlet unit against
 the rules above and works without Claude:
 
 ```bash
-scripts/validate.sh path/to/unit.container
+skills/podman-quadlet-service/scripts/validate.sh path/to/unit.container
 ```
 
 Exit codes:
@@ -83,7 +96,7 @@ Exit 1 uses two line prefixes, and both are real failures:
 Grepping only for `^R[0-9]` silently misses every `LINT:` failure. Match both:
 
 ```bash
-scripts/validate.sh unit.container | grep -E '^(R[0-9]+|LINT):'
+skills/podman-quadlet-service/scripts/validate.sh unit.container | grep -E '^(R[0-9]+|LINT):'
 ```
 
 ## License

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "podman-quadlet-service",
+  "description": "Rootless Podman Quadlet service installation with enforced conventions.",
+  "owner": {
+    "name": "Nayrosk",
+    "url": "https://github.com/nayrosk"
+  },
+  "plugins": [
+    {
+      "name": "podman-quadlet-service",
+      "description": "Install a containerized service as a rootless Podman Quadlet systemd unit, with a conformance linter and generated runbooks.",
+      "source": "./",
+      "category": "devops"
+    }
+  ]
+}

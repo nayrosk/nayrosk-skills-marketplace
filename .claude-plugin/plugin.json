@@ -1,0 +1,19 @@
+{
+  "name": "podman-quadlet-service",
+  "description": "Install a containerized service as a rootless Podman Quadlet systemd unit, enforcing pinned images, podman secrets, healthchecks, bind mounts, resource limits and reverse-proxy placement, with generated runbooks.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Nayrosk",
+    "url": "https://github.com/nayrosk"
+  },
+  "homepage": "https://github.com/nayrosk/podman-quadlet-service",
+  "license": "MIT",
+  "keywords": [
+    "podman",
+    "quadlet",
+    "systemd",
+    "rootless",
+    "containers",
+    "self-hosting"
+  ]
+}
