@@ -313,16 +313,37 @@ if quadlet_bin="$("$HERE/find-quadlet.sh" 2>/dev/null)"; then
     [ -f "$unit_dir/$ref" ] && cp "$unit_dir/$ref" "$tmp/"
   done <<< "$(printf '%s\n' "$norm" | awk -F'\t' '{print $3}' \
     | grep -oE '[A-Za-z0-9_.@-]+\.(network|volume|pod|image|build|kube)\b' | sort -u)"
-  lint_out="$(QUADLET_UNIT_DIRS="$tmp" "$quadlet_bin" -dryrun -user 2>&1)"
-  if ! echo "$lint_out" | grep -q 'Loading source unit file'; then
+  # `quadlet -dryrun` writes the GENERATED UNIT BODY to stdout and its own
+  # diagnostics to stderr, one line each, prefixed `quadlet-generator[<pid>]: `.
+  # Matching /error/ against the COMBINED stream therefore rejected any unit
+  # whose own text merely contained that substring - `Image=ghcr.io/example/
+  # errortracker:1.2.3`, `Description=... error-tracking ...`, a HealthCmd=
+  # that greps for "error" - with a LINT failure that names nothing wrong,
+  # while every R-rule passed. That is unrecoverable for the workflow, since
+  # SKILL.md forbids force-installing past a validate.sh failure. So: discard
+  # stdout, and match only what the generator itself said on stderr.
+  lint_err="$(QUADLET_UNIT_DIRS="$tmp" "$quadlet_bin" -dryrun -user 2>&1 1>/dev/null)"
+  lint_rc=$?
+  # Narrow further to the generator's own log lines by stripping its
+  # `quadlet-generator[<pid>]: ` prefix, so only lines it actually emitted are
+  # matched. If a build logs with some other prefix, nothing matches and we
+  # fall back to the raw stderr - still generator-only, never the unit body.
+  diags="$(printf '%s\n' "$lint_err" | sed -nE 's/^quadlet-generator(\[[0-9]+\])?: //p')"
+  [ -n "$diags" ] || diags="$lint_err"
+  # A run that read the unit at all logs one `Loading source unit file <path>`
+  # line per unit; its absence means the lint never ran (e.g. the generator
+  # searched the wrong directory) and must not be mistaken for a clean pass.
+  if ! printf '%s\n' "$lint_err" | grep -q 'Loading source unit file'; then
     fail LINT "quadlet -dryrun parsed no unit file - the lint did not run"
-  elif echo "$lint_out" | grep -qiE 'unsupported key|error'; then
+  # The generator exits non-zero when it rejects a unit; the pattern match is
+  # a second, independent signal so a build that reports an error but still
+  # exits 0 is not silently accepted.
+  elif [ "$lint_rc" -ne 0 ] \
+    || printf '%s\n' "$diags" | grep -qE 'unsupported key|^converting |encountered some errors'; then
     fail LINT "quadlet -dryrun reported errors"
-    # Report the generator's own per-unit diagnostics too, not just its
-    # final "processing encountered some errors" summary: the summary names
-    # no cause, and grepping for `error` alone misses lines like
-    # `converting "x.container": requested Quadlet unit ... was not found`.
-    echo "$lint_out" | grep -iE 'unsupported key|error|^[^ ]*: converting |converting "' | sed 's/^/    /'
+    # Report the generator's own per-unit diagnostics, not just its final
+    # "processing encountered some errors" summary, which names no cause.
+    printf '%s\n' "$diags" | grep -v '^Loading source unit file' | sed 's/^/    /'
   fi
   rm -rf "$tmp"
 else

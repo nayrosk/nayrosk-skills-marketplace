@@ -1,0 +1,31 @@
+# R5 violation: HealthCmd= is present, so the NO-HEALTHCHECK exemption does
+# not apply and every companion key is required - but HealthInterval= is
+# missing. Covers validate.sh's "HealthCmd= present but <key>= missing" arm,
+# which the other R5 fixture (no HealthCmd= at all) never reaches.
+[Unit]
+Description=fixture
+
+[Container]
+ContainerName=fixture
+Image=docker.io/library/alpine:3.20
+Pull=missing
+UserNS=keep-id:uid=1000,gid=1000
+EnvironmentFile=@HOME@/.fixture/.env
+Secret=fixture_secret,type=env,target=APP_SECRET
+Volume=@HOME@/.fixture/data:/data:Z
+Network=podman
+HealthCmd=/bin/true
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=30s
+Memory=256m
+PidsLimit=256
+PodmanArgs=--cpus=1.0
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

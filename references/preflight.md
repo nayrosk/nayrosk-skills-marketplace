@@ -36,6 +36,7 @@ value.
 | Quadlet unit dir | see "Unit directory writability" below | directory (or its parent, if not yet created) is writable | not an abort — **CREATE** with `mkdir -p` when missing; **ABORT** if the writability probe fails |
 | Quadlet generator | `scripts/find-quadlet.sh` (from the skill directory) | prints an absolute path on stdout, exit 0 | **ABORT** — exit 1 means neither `.container` generation nor linting is possible; report the script's stderr diagnostic |
 | systemd user manager | see "systemd user manager" below | stdout is exactly `running` or `degraded` | **ABORT** — stdout is anything else, including empty (a connection failure to the user bus) |
+| Cgroups version | `podman info --format '{{.Host.CgroupsVersion}}'` | `v2` | **WARN** — see "Cgroups v1 and resource limits" below; R9's limits will not be enforced |
 | Free space | `df -h --output=avail "$HOME" \| tail -1` | enough free space for the image and its data | **WARN** and ask the operator whether to continue if space looks insufficient for the service being installed |
 
 ## Unit directory writability
@@ -81,6 +82,32 @@ esac
   diagnostic such as `Failed to connect to user scope bus...` to stderr) →
   **ABORT**, naming the unexpected state (or "user bus unreachable" when
   `state` is empty) and, if available, the stderr diagnostic.
+
+## Cgroups v1 and resource limits
+
+```bash
+podman info --format '{{.Host.CgroupsVersion}}'
+```
+
+Expected `v2`. Anything else (`v1`) is a **WARN**, not an ABORT: the service
+will install and run normally. What it will not do is enforce its limits.
+
+Rootless Podman cannot delegate cgroup controllers on cgroups v1, so
+`Memory=`, `PidsLimit=` and `PodmanArgs=--cpus=` are **accepted, warned
+about, and then ignored**. Podman prints a note along the lines of
+"Resource limits are not supported and ignored on cgroups V1 rootless
+systems" and starts the container unrestricted. Nothing downstream catches
+this: the Quadlet generator converts those keys happily, so
+`scripts/validate.sh` reports R9 as satisfied and the unit passes its lint
+while enforcing no limit at all.
+
+Say this to the operator plainly rather than reporting R9 as met: on this
+host the memory, PID and CPU limits in the unit are documentation, not
+enforcement, and one misbehaving container can exhaust the host's memory or
+PID table. The fix is a host with cgroups v2 (unified hierarchy) or a
+rootful installation; neither is something this skill changes on its own.
+Keep the R9 keys in the unit regardless — they cost nothing, they are
+correct, and they take effect as written the moment the host moves to v2.
 
 ## Notes on interpreting results
 

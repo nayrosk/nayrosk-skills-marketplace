@@ -12,6 +12,25 @@ generation time. Quadlet's own `%h` specifier is deliberately **not** used
 anywhere in generated units — R11 forbids it, along with `~` and any other
 relative or unresolved path form.
 
+### Home-directory notation: three spellings, one meaning
+
+The repository uses a different token for the home directory in each kind
+of file. They all denote the same thing — the absolute value of `$HOME` —
+but only one of them is ever substituted:
+
+| Spelling | Where it appears | What to do with it |
+|---|---|---|
+| `%HOME%` | this document's examples, only | **Documentation notation.** Never write it into a file. It exists so an example path reads as a path; it is not a placeholder to substitute, and it is not a systemd specifier. |
+| `<HOME>` | `references/templates/` | **The real placeholder.** Substitute it with the resolved absolute home directory when generating a unit, `.env`, or runbook. |
+| `$HOME` | `SKILL.md`, `references/preflight.md`, runbook shell snippets | **A shell variable**, in text meant to be run by a shell, where the shell expands it. |
+
+The one mistake to avoid: writing `%HOME%` into a generated unit. It is not
+a systemd specifier, so systemd would not expand it — Quadlet would pass the
+literal string `%HOME%/...` through as a path and the mount would fail. The
+`%`-delimited form resembles `%h`, which R11 forbids for its own reasons;
+`%HOME%` is not that either. When generating from a template, the token to
+look for and replace is `<HOME>`.
+
 ## R1 - Pinned image version
 
 Always pin an explicit version. When upstream publishes no semver, pin the
@@ -198,6 +217,34 @@ Why: named volumes and relative paths hide state inside Podman's storage
 tree, making backup, inspection, and manual recovery harder than `ls` and
 `cp` on a known directory.
 
+`Volume=` is the only accepted spelling for a bind mount, and
+`scripts/validate.sh` enforces that, not just the path rule:
+
+- **`Mount=` is checked the same way, not exempt.** It is the long-form
+  spelling of the same thing
+  (`Mount=type=bind,source=%HOME%/.myservice/data,destination=/data`), so
+  its `source=` (or `src=`) host path must be absolute and under
+  `%HOME%/.<SERVICE_NAME>/` exactly as a `Volume=` source must. An entry
+  with no host path at all (`type=tmpfs`) has nothing to check and passes.
+- **`PodmanArgs=` must not smuggle a mount past that check.** `-v`,
+  `--volume` and `--mount` in `PodmanArgs=` are rejected outright,
+  whatever their value, because Quadlet tokenizes and unquotes
+  `PodmanArgs=` into the real `podman run` command line. The rejection
+  covers every form that reaches podman: quoted (`"-v" /etc:/host-etc`),
+  `\`-continued across lines, `=`-separated, and a short option's value
+  attached with no separator (`-v/etc:/host-etc:ro`).
+
+❌ Also incorrect — same rule, different spelling
+```ini
+Mount=type=bind,source=/etc,destination=/host-etc,ro
+PodmanArgs=-v /etc:/host-etc:ro
+PodmanArgs=--mount type=bind,source=/etc,destination=/host-etc
+```
+
+Why: a rule that only inspected `Volume=` would be trivially bypassed by
+writing the same bind mount another way; all three spellings end up as the
+same `podman run` argument.
+
 ## R9 - Resource limits
 
 `Memory=` and `PidsLimit=` are set natively. Quadlet has no native CPU-limit
@@ -218,6 +265,24 @@ PodmanArgs=--cpus=1.0
 Why: an unbounded container can starve the host of memory or exhaust its PID
 table; explicit limits keep one service's misbehavior from taking down the
 rest of the machine.
+
+Memory and PID limits are set with the native keys only.
+`scripts/validate.sh` rejects `-m`, `--memory` and `--pids-limit` in
+`PodmanArgs=`, in every form Quadlet accepts (quoted, `\`-continued,
+`=`-separated, or with the value attached directly to a short option, as in
+`-m512m`), for the same reason R8 rejects `-v` there. `--cpus=` is the one
+deliberate exception, because Quadlet has no native key for it.
+
+❌ Also incorrect — native key bypassed through `PodmanArgs=`
+```ini
+PodmanArgs=--cpus=1.0 -m 512m
+PodmanArgs=--cpus=1.0 --pids-limit 256
+```
+
+Why: `Memory=` and `PidsLimit=` are the keys a reader (and a future
+regeneration of this unit) looks at; a limit hidden in a `PodmanArgs=`
+string is invisible to both, and a later edit that rewrites that line drops
+the limit silently.
 
 ### Note: `DropCapability=ALL` and images with file capabilities
 

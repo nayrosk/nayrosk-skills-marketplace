@@ -1,0 +1,35 @@
+# Regression fixture for the LINT guard.
+# Every value below deliberately contains the substring "error" in innocuous,
+# conformant text: the image repository name, the prose Description=, and a
+# HealthCmd= that greps for the word. The Quadlet generator echoes the
+# generated unit body on stdout, so a LINT guard that matched /error/ against
+# the combined stdout+stderr rejected this unit while every R-rule passed.
+# This unit MUST validate as conformant.
+[Unit]
+Description=fixture error-tracking service
+
+[Container]
+ContainerName=fixture
+Image=ghcr.io/getsentry/errortracker:1.2.3
+Pull=missing
+UserNS=keep-id:uid=1000,gid=1000
+EnvironmentFile=@HOME@/.fixture/.env
+Secret=fixture_secret,type=env,target=APP_SECRET
+Volume=@HOME@/.fixture/data:/data:Z
+Network=podman
+HealthCmd=/bin/sh -c "grep -q error /tmp/x || exit 0"
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=30s
+Memory=256m
+PidsLimit=256
+PodmanArgs=--cpus=1.0
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

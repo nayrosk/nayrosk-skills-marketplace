@@ -30,10 +30,17 @@ the actual installed version rather than assuming one.
 1. **Research** - find the newest version matching: rootless-capable,
    distroless or minimal, actively maintained. Read upstream docs for
    required capabilities, volumes, ports, environment variables and
-   secrets. Resolve the exact tag and its digest - `skopeo inspect
-   docker://<REGISTRY>/<IMAGE>:<TAG>` prints the manifest `Digest`, and
-   `podman search --list-tags <REGISTRY>/<IMAGE> --format '{{.Tag}}'`
-   sorted with `sort -V` shows which tags exist. Decide network placement
+   secrets. Resolve the exact tag and its digest with Podman itself, which
+   preflight has already verified - no extra tool is required, and none may
+   be assumed present. `podman search --list-tags <REGISTRY>/<IMAGE>
+   --format '{{.Tag}}'` sorted with `sort -V` shows which tags exist, and
+   `podman manifest inspect <REGISTRY>/<IMAGE>:<TAG>` queries the registry
+   **without pulling**, printing the manifest for each platform. Pin the
+   `digest` of the entry whose `platform.architecture` matches `podman info
+   --format '{{.Host.Arch}}'`; for a single-platform image the manifest is
+   printed directly and its digest is the one to use. Step 3 confirms the
+   pinned digest after pulling with `podman image inspect --format
+   '{{.Digest}}'`, which returns exactly this value. Decide network placement
    using `references/networking.md` (`public-noauth`, `public-auth`,
    `monitoring`, `loopback`, or `internal`).
 
@@ -49,8 +56,9 @@ the actual installed version rather than assuming one.
    the runbooks there). Resolve every path with `realpath` (R11); never
    write `~` or `%h` into a unit. `.env` itself is not created here - see
    step 4.
-3. **Pull the image** by digest; verify the digest matches what was
-   approved.
+3. **Pull the image** by digest; verify with `podman image inspect --format
+   '{{.Digest}}' <REGISTRY>/<IMAGE>@sha256:<DIGEST>` that the digest matches
+   what was approved.
 4. **Generate configuration** - copy `references/templates/service.container`
    (and `references/templates/service.network` when the placement is
    `internal`, or when a `loopback` service also needs a named network for
@@ -84,8 +92,9 @@ the actual installed version rather than assuming one.
 5. **Write the reverse-proxy route** - for the `public-noauth`,
    `public-auth`, and `monitoring` placements, add the route using the
    matching snippet from `references/networking.md` and reload/validate
-   the proxy's config as that section describes. The `internal` placement
-   has no route to write.
+   the proxy's config as that section describes. The `loopback` and
+   `internal` placements have no route to write - `loopback` is reached
+   directly on `127.0.0.1` and `internal` is not exposed at all.
 6. **Install** - place the unit(s) in
    `${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/`, then
    `systemctl --user daemon-reload`.

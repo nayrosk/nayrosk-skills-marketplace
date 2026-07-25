@@ -77,6 +77,13 @@ check "latest-slim tag is not falsely rejected (R1)" 0 "$VALIDATE" "$(render "$H
 check "NO-HEALTHCHECK exemption is honoured (R5)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-no-healthcheck.container")"
 check "CRLF line endings are not falsely rejected" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-crlf.container")"
 check "a tilde in a prose Description= is not a path (R11)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-prose-tilde.container")"
+# Regression: the LINT guard used to grep the generator's COMBINED stdout+stderr
+# for "error", but the generated unit BODY is what lands on stdout - so any unit
+# whose own text contained that substring (an image named errortracker, a prose
+# Description=, a HealthCmd= grepping for "error") was rejected with
+# "LINT: quadlet -dryrun reported errors" while every R-rule passed, leaving the
+# service uninstallable. The guard must read the generator's diagnostics only.
+check "an innocuous \"error\" substring in the unit body is not a LINT failure" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-error-substring.container")"
 # Regression: a unit whose Network= names a sibling .network unit must not be
 # failed by the LINT guard. The Quadlet generator resolves such references
 # against QUADLET_UNIT_DIRS and aborts with "requested Quadlet unit

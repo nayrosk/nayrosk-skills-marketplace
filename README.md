@@ -67,8 +67,24 @@ the rules above and works without Claude:
 scripts/validate.sh path/to/unit.container
 ```
 
-Exit 0 means conformant; exit 1 prints one `R<n>: <message>` line per
-violation.
+Exit codes:
+
+| Exit | Meaning |
+|---|---|
+| 0 | Conformant; prints `conformant` |
+| 1 | At least one problem; one diagnostic line per problem, then a count |
+| 2 | Usage error (missing or unreadable unit path) — not a conformance result |
+
+Exit 1 uses two line prefixes, and both are real failures:
+
+- `R<n>: <message>` — a convention violation (R1..R11)
+- `LINT: <message>` — the Quadlet generator itself rejected the unit
+
+Grepping only for `^R[0-9]` silently misses every `LINT:` failure. Match both:
+
+```bash
+scripts/validate.sh unit.container | grep -E '^(R[0-9]+|LINT):'
+```
 
 ## License
 
