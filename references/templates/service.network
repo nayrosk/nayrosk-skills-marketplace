@@ -1,0 +1,8 @@
+# <SERVICE_NAME> internal network.
+# Used when the service must not be reachable from outside the host.
+
+[Unit]
+Description=<SERVICE_NAME> internal network
+
+[Network]
+NetworkName=<SERVICE_NAME>
