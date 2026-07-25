@@ -62,10 +62,30 @@ check "find-quadlet fails on invalid QUADLET_BIN" 1 env QUADLET_BIN=/nonexistent
 
 check "conformant fixture validates" 0 "$VALIDATE" "$(render "$HERE/fixtures/conformant.container")"
 
+# Positive regressions: these fixtures are deliberately named outside the
+# violation-r<n>-* convention (they are not one), so the glob loop below
+# does not sweep them in; each is asserted explicitly instead.
+check "latest-slim tag is not falsely rejected (R1)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-latest-slim.container")"
+check "NO-HEALTHCHECK exemption is honoured (R5)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-no-healthcheck.container")"
+
 for f in "$HERE"/fixtures/violation-*.container; do
   rule="$(basename "$f" | sed -E 's/^violation-(r[0-9]+)-.*/\1/' | tr 'a-z' 'A-Z')"
   check_rule "$f" "$rule"
 done
+
+# The LINT guard is a distinct failure channel (the Quadlet generator itself
+# rejecting the unit, not a convention violation) and is reported as
+# "LINT: ..." rather than "R<n>: ...", so it cannot be named violation-r<n>-*
+# and is checked explicitly rather than through the rule-mapped loop above.
+lint_rendered="$(render "$HERE/fixtures/lint-bogus-key.container")"
+lint_out="$("$VALIDATE" "$lint_rendered" 2>&1)"; lint_rc=$?
+if [ "$lint_rc" -eq 1 ] && echo "$lint_out" | grep -q '^LINT:'; then
+  echo "PASS lint-bogus-key.container -> LINT"
+else
+  echo "FAIL lint-bogus-key.container: exit $lint_rc, expected 1 with a LINT: line"
+  echo "$lint_out" | sed 's/^/    /'
+  fails=$((fails+1))
+fi
 
 [ "$fails" -eq 0 ] && echo "ALL TESTS PASSED" || echo "$fails FAILING CASE(S)"
 exit $((fails > 0))
