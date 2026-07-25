@@ -13,8 +13,16 @@ candidates=(
 )
 
 # Honour an explicit override first: some users install podman in a prefix.
-if [ -n "${QUADLET_BIN:-}" ] && [ -x "${QUADLET_BIN}" ]; then
-  echo "$QUADLET_BIN"; exit 0
+if [ -n "${QUADLET_BIN:-}" ]; then
+  if [ -x "${QUADLET_BIN}" ]; then
+    echo "$QUADLET_BIN"; exit 0
+  else
+    cat >&2 <<EOF
+QUADLET_BIN is set to a non-executable path: $QUADLET_BIN
+Ensure this path exists and is executable, or unset QUADLET_BIN to use autodetection.
+EOF
+    exit 1
+  fi
 fi
 
 for c in "${candidates[@]}"; do
