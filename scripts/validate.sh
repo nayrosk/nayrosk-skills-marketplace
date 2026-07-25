@@ -70,25 +70,25 @@ norm="$(printf '%s\n' "$joined" | awk '
 # follows counts. This matters even for keys we otherwise treat as
 # effectively single-valued (get_last is built on this), since Quadlet
 # itself only ever sees the post-reset tail.
+#
+# The reset is tracked per (section, key), never per key alone: in systemd a
+# list lives inside its section, so a bare `Key=` planted in one section must
+# not cancel values accumulated in another. That distinction is invisible in
+# a section-scoped lookup but load-bearing for the unscoped one (R3 scans
+# Environment= file-wide), where a bare `Environment=` dropped into an inert
+# [Install] block would otherwise erase the real, live [Service] values from
+# the linter's view while Quadlet still emits them.
 get_all() {
   local key="$1" want_section="${2:-}"
-  if [ -n "$want_section" ]; then
-    printf '%s\n' "$norm" | awk -F'\t' -v k="$key" -v s="$want_section" '
-      $2==k && $1==s { n++; v[n]=$3 }
-      END {
-        reset = 0
-        for (i = 1; i <= n; i++) if (v[i] == "") reset = i
-        for (i = reset + 1; i <= n; i++) if (v[i] != "") print v[i]
-      }'
-  else
-    printf '%s\n' "$norm" | awk -F'\t' -v k="$key" '
-      $2==k { n++; v[n]=$3 }
-      END {
-        reset = 0
-        for (i = 1; i <= n; i++) if (v[i] == "") reset = i
-        for (i = reset + 1; i <= n; i++) if (v[i] != "") print v[i]
-      }'
-  fi
+  printf '%s\n' "$norm" | awk -F'\t' -v k="$key" -v s="$want_section" '
+    $2==k && (s=="" || $1==s) { n++; sec[n]=$1; v[n]=$3 }
+    END {
+      for (i = 1; i <= n; i++) if (v[i] == "") reset[sec[i]] = i
+      for (i = 1; i <= n; i++) {
+        last = (sec[i] in reset) ? reset[sec[i]] : 0
+        if (v[i] != "" && i > last) print v[i]
+      }
+    }'
 }
 
 # get_last <key> [section] -> the LAST value for <key> (systemd's own
@@ -247,10 +247,24 @@ done <<< "$(get_all PodmanArgs Container)"
 # R10 - explicit log driver
 [ -n "$(get_last LogDriver Container)" ] || fail R10 "missing explicit LogDriver="
 
-# R11 - absolute, canonical paths only. File-wide on purpose (see note
-# above): the point of this scan is "this specifier must appear nowhere",
-# and Environment=/other [Service] directives can carry a real %h/~ too.
-if printf '%s\n' "$norm" | awk -F'\t' '{print $3}' | grep -qE '(~|%h)'; then
+# R11 - absolute, canonical paths only. The scan stays section-wide on
+# purpose (see note above): a real path directive outside [Container] -
+# EnvironmentFile=, WorkingDirectory=, an Exec* line under [Service] - can
+# carry a live ~ or %h just as easily, so restricting it to [Container]
+# would blind the rule to those.
+#
+# It is narrowed by KEY instead, because R11 is a rule about paths: a tilde
+# inside a prose value (`Description=fixture ~ a great service`) is not a
+# path and must not fail. A key is treated as path-bearing when it is an
+# Exec*/Condition*/Assert* directive, when its name ends in a path-ish noun
+# (Path, Paths, File, Files, Directory, Dir, Image, Root - this is what
+# catches EnvironmentFile=, WorkingDirectory=, ...), or when it is one of
+# the remaining Quadlet/systemd path carriers named explicitly below.
+if printf '%s\n' "$norm" | awk -F'\t' '
+    $2 ~ /^(Exec|Condition|Assert)/ ||
+    $2 ~ /(Path|Paths|File|Files|Directory|Dir|Image|Root)$/ ||
+    $2 ~ /^(Volume|Mount|Tmpfs|Secret|Environment|AddDevice|Rootfs|PodmanArgs|GlobalArgs|ContainersConfModule|RequiresMountsFor|TemporaryFileSystem|StandardInput|StandardOutput|StandardError|Unmask|HealthCmd|EntryPoint|WorkingDir)$/ { print $3 }
+  ' | grep -qE '(~|%h)'; then
   fail R11 "path uses ~ or the %h specifier instead of an absolute path"
 fi
 while IFS= read -r val; do
