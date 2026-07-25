@@ -46,7 +46,8 @@ joined="$(awk '
 # Pass 2: track [Section] state, drop comments/blank lines, and split each
 # directive on the FIRST `=` after trimming whitespace on both sides of it
 # (systemd accepts `Key = value` and `Key= value` alike). Output is a TSV
-# of section\tkey\tvalue, one row per directive, in file order.
+# of section\tkey\tvalue, one row per directive, in file order. A bare
+# `Key=` (empty value) is recorded too, since it means something below.
 norm="$(printf '%s\n' "$joined" | awk '
   BEGIN { section = "" }
   {
@@ -63,15 +64,30 @@ norm="$(printf '%s\n' "$joined" | awk '
 ')"
 
 # get_all <key> [section] -> every value for <key>, in file order, one per
-# line (optionally restricted to a section). Used for list-type directives
-# (Volume=, Secret=, Environment=, PodmanArgs=, AutoUpdate=) where every
-# occurrence matters.
+# line (optionally restricted to a section). Honours systemd's list-reset
+# semantics: for a list-valued directive, a bare `Key=` (empty value)
+# discards every value accumulated for that key so far, and only what
+# follows counts. This matters even for keys we otherwise treat as
+# effectively single-valued (get_last is built on this), since Quadlet
+# itself only ever sees the post-reset tail.
 get_all() {
   local key="$1" want_section="${2:-}"
   if [ -n "$want_section" ]; then
-    printf '%s\n' "$norm" | awk -F'\t' -v k="$key" -v s="$want_section" '$2==k && $1==s {print $3}'
+    printf '%s\n' "$norm" | awk -F'\t' -v k="$key" -v s="$want_section" '
+      $2==k && $1==s { n++; v[n]=$3 }
+      END {
+        reset = 0
+        for (i = 1; i <= n; i++) if (v[i] == "") reset = i
+        for (i = reset + 1; i <= n; i++) if (v[i] != "") print v[i]
+      }'
   else
-    printf '%s\n' "$norm" | awk -F'\t' -v k="$key" '$2==k {print $3}'
+    printf '%s\n' "$norm" | awk -F'\t' -v k="$key" '
+      $2==k { n++; v[n]=$3 }
+      END {
+        reset = 0
+        for (i = 1; i <= n; i++) if (v[i] == "") reset = i
+        for (i = reset + 1; i <= n; i++) if (v[i] != "") print v[i]
+      }'
   fi
 }
 
@@ -85,6 +101,12 @@ get_last() { get_all "$1" "${2:-}" | tail -1; }
 # duplicate elsewhere to defeat or satisfy a rule if lookups were global.
 # R7 already scoped Restart=/RestartSec= to [Service] for the same reason;
 # every Container-level key below now does the equivalent.
+#
+# The one deliberate exception is R3's "no inline Environment=" check and
+# R11's `~`/`%h` scan: Environment= is ALSO a native systemd [Service]
+# directive that Quadlet passes through verbatim, so a value hidden there
+# is not a decoy - it really lands in the generated unit. Those two checks
+# stay file-wide on purpose; do not scope them to [Container].
 
 # R1 - pinned image (last [Container] Image= wins; tag matched exactly,
 # case-insensitively)
@@ -109,8 +131,9 @@ fi
 # R2 - userns mapping
 printf '%s' "$(get_last UserNS Container)" | grep -q 'keep-id' || fail R2 "missing UserNS=keep-id"
 
-# R3 - no inline environment
-[ -z "$(get_all Environment Container)" ] || fail R3 "inline Environment= is forbidden, use EnvironmentFile="
+# R3 - no inline environment. File-wide on purpose (see note above):
+# Environment= under [Service] is real, not inert, to Quadlet.
+[ -z "$(get_all Environment)" ] || fail R3 "inline Environment= is forbidden, use EnvironmentFile="
 [ -n "$(get_all EnvironmentFile Container)" ] || fail R3 "missing EnvironmentFile="
 
 # R4 - secrets shape: type=env|mount AND target= are both required
@@ -149,20 +172,36 @@ fi
 # canonicalized with `realpath -m` (no existence required) before the
 # prefix test, so a `..` segment cannot walk the mount out of the tree.
 canon_tree="$(realpath -m -- "$tree")"
-while IFS= read -r val; do
-  [ -z "$val" ] && continue
-  host="${val%%:*}"
+check_host_path() { # check_host_path <host> <description-for-error>
+  local host="$1" what="$2" canon_host
   case "$host" in
     /*)
       canon_host="$(realpath -m -- "$host")"
       case "$canon_host" in
         "$canon_tree"/*) : ;;
-        *) fail R8 "bind mount outside $tree: $host (resolves to $canon_host)" ;;
+        *) fail R8 "$what outside $tree: $host (resolves to $canon_host)" ;;
       esac
       ;;
-    *) fail R8 "named volume or non-absolute path: $host" ;;
+    *) fail R8 "$what is a named volume or non-absolute path: $host" ;;
   esac
+}
+
+while IFS= read -r val; do
+  [ -z "$val" ] && continue
+  check_host_path "${val%%:*}" "bind mount"
 done <<< "$(get_all Volume Container)"
+
+# R8 (continued) - Mount= is the long-form spelling of a bind mount
+# (`Mount=type=bind,source=/etc,destination=/host-etc,ro`) and gets the
+# same host-path treatment: parse its source=/src= field (the src= alias
+# is accepted the same as source=) and require it under the tree. Entries
+# with no source=/src= (e.g. type=tmpfs) have no host path to check.
+while IFS= read -r val; do
+  [ -z "$val" ] && continue
+  src="$(printf '%s\n' "$val" | tr ',' '\n' | sed -nE 's/^(source|src)=//p' | tail -1)"
+  [ -z "$src" ] && continue
+  check_host_path "$src" "Mount= source"
+done <<< "$(get_all Mount Container)"
 
 # PodmanArgs= is the one directive Quadlet actually tokenizes/unquotes
 # before building ExecStart (confirmed against `quadlet -dryrun`:
@@ -208,9 +247,10 @@ done <<< "$(get_all PodmanArgs Container)"
 # R10 - explicit log driver
 [ -n "$(get_last LogDriver Container)" ] || fail R10 "missing explicit LogDriver="
 
-# R11 - absolute, canonical paths only (scoped to [Container], where every
-# path-bearing directive lives)
-if printf '%s\n' "$norm" | awk -F'\t' '$1=="Container" {print $3}' | grep -qE '(~|%h)'; then
+# R11 - absolute, canonical paths only. File-wide on purpose (see note
+# above): the point of this scan is "this specifier must appear nowhere",
+# and Environment=/other [Service] directives can carry a real %h/~ too.
+if printf '%s\n' "$norm" | awk -F'\t' '{print $3}' | grep -qE '(~|%h)'; then
   fail R11 "path uses ~ or the %h specifier instead of an absolute path"
 fi
 while IFS= read -r val; do
