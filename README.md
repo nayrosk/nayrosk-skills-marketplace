@@ -28,7 +28,7 @@ Clone the repository anywhere, then symlink or copy it into a skills
 directory:
 
 ```bash
-git clone https://github.com/<owner>/podman-quadlet-service.git
+git clone https://github.com/nayrosk/podman-quadlet-service.git
 ln -s "$PWD/podman-quadlet-service" "$HOME/.claude/skills/podman-quadlet-service"
 ```
 
@@ -73,12 +73,12 @@ Exit codes:
 |---|---|
 | 0 | Conformant; prints `conformant` |
 | 1 | At least one problem; one diagnostic line per problem, then a count |
-| 2 | Usage error (missing or unreadable unit path) — not a conformance result |
+| 2 | Usage error (missing or unreadable unit path), not a conformance result |
 
 Exit 1 uses two line prefixes, and both are real failures:
 
-- `R<n>: <message>` — a convention violation (R1..R11)
-- `LINT: <message>` — the Quadlet generator itself rejected the unit
+- `R<n>: <message>` - a convention violation (R1..R11)
+- `LINT: <message>` - the Quadlet generator itself rejected the unit
 
 Grepping only for `^R[0-9]` silently misses every `LINT:` failure. Match both:
 
