@@ -255,15 +255,32 @@ done <<< "$(get_all PodmanArgs Container)"
 #
 # It is narrowed by KEY instead, because R11 is a rule about paths: a tilde
 # inside a prose value (`Description=fixture ~ a great service`) is not a
-# path and must not fail. A key is treated as path-bearing when it is an
-# Exec*/Condition*/Assert* directive, when its name ends in a path-ish noun
-# (Path, Paths, File, Files, Directory, Dir, Image, Root - this is what
-# catches EnvironmentFile=, WorkingDirectory=, ...), or when it is one of
-# the remaining Quadlet/systemd path carriers named explicitly below.
+# path and must not fail.
+#
+# That narrowing is a DENY-list, deliberately, and must stay one. An
+# allow-list of path-bearing keys fails OPEN: every Quadlet key it does not
+# enumerate is silently unscanned, so the rule quietly rots as Podman adds
+# keys, and a single typo in the list (`Entrypoint` has a lowercase p;
+# `Unmask` has a sibling `Mask`) is an invisible hole. `man
+# podman-systemd.unit` already defines ~147 keys and many carry a real host
+# path - SeccompProfile=, LogOpt=path=, Entrypoint=, Mask=, Unmask=,
+# HealthStartupCmd=, ReloadCmd=, DecryptionKey=, AuthFile=, CertDir=,
+# Yaml=, ConfigMap=, Device=, AddDevice=, Rootfs=, File=, IgnoreFile=,
+# SetWorkingDirectory=, WorkingDir=, ContainersConfModule=, GlobalArgs=,
+# Artifact=, HealthLogDestination= ... enumerating them is a losing game.
+#
+# So: scan EVERY key, and exempt only keys whose value is prose or free
+# text, where a tilde is punctuation rather than a path.
+#   Description   - free-form text (man systemd.unit)
+#   Documentation - space-separated URIs; a URL may legitimately contain
+#                   `~` (http://example.com/~user/docs) and is not a
+#                   filesystem path (man systemd.unit)
+#   Annotation    - arbitrary user key=value metadata (man podman-systemd.unit)
+#   Label         - arbitrary user key=value metadata (man podman-systemd.unit)
+# A new Quadlet key is therefore scanned until someone deliberately decides
+# it is prose, which is the safe direction for a linter to fail.
 if printf '%s\n' "$norm" | awk -F'\t' '
-    $2 ~ /^(Exec|Condition|Assert)/ ||
-    $2 ~ /(Path|Paths|File|Files|Directory|Dir|Image|Root)$/ ||
-    $2 ~ /^(Volume|Mount|Tmpfs|Secret|Environment|AddDevice|Rootfs|PodmanArgs|GlobalArgs|ContainersConfModule|RequiresMountsFor|TemporaryFileSystem|StandardInput|StandardOutput|StandardError|Unmask|HealthCmd|EntryPoint|WorkingDir)$/ { print $3 }
+    $2 !~ /^(Description|Documentation|Annotation|Label)$/ { print $3 }
   ' | grep -qE '(~|%h)'; then
   fail R11 "path uses ~ or the %h specifier instead of an absolute path"
 fi
