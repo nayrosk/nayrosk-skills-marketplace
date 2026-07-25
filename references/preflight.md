@@ -1,50 +1,29 @@
 # Preflight Checks
 
-This is step 0 of the workflow: **preflight runs before any service
-artifact is written to disk.** Run every check below, in order, before
-creating any service tree, template, or unit file. A failed **ABORT** check
-stops the workflow immediately — report the check by name and do not
-proceed to later checks or to installation.
+Step 0 of workflow: **preflight runs before any service artifact written to disk.** Run every check below, in order, before creating any service tree, template, or unit file. Failed **ABORT** check stops workflow immediately - report check by name, do not proceed to later checks or install.
 
-The two changes marked below (creating the Quadlet unit directory, and
-enabling linger after an explicit yes) are host preconditions, not service
-artifacts, and are the only exceptions to that rule — `SKILL.md`'s "write
-nothing before the approval gate" is about the service being installed.
-Creating the unit directory may also be deferred to workflow step 6, which
-needs it anyway; probing its writability here is what matters.
+Two changes marked below (create Quadlet unit dir, enable linger after explicit yes) are host preconditions, not service artifacts - only exceptions to that rule. `SKILL.md` "write nothing before approval gate" is about service being installed. Creating unit dir may also defer to workflow step 6, which need it anyway; probing writability here is what matter.
 
-All checks are read-only except the two explicitly marked as making a
-change (unit directory creation, and linger enablement, which only runs
-after the operator says yes).
+All checks read-only except two marked as making change (unit dir creation, linger enablement - latter only runs after operator say yes).
 
-The Quadlet unit directory is `${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd`.
-Always resolve it this way — never assume `$HOME/.config` directly — so the
-check honours a user's `XDG_CONFIG_HOME` override.
+Quadlet unit dir is `${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd`. Always resolve this way - never assume `$HOME/.config` - so check honour user `XDG_CONFIG_HOME` override.
 
-The Quadlet generator is never referenced by a literal path (it lives in
-different locations across distributions). It is located by running the
-skill's `scripts/find-quadlet.sh`, which prints the generator's absolute
-path on stdout and exits 0, or writes a diagnostic to stderr and exits 1
-if it cannot be found, or if `QUADLET_BIN` is set to a non-executable
-value.
+Quadlet generator never referenced by literal path (lives in different places across distros). Locate by running skill `scripts/find-quadlet.sh`, which print generator absolute path on stdout and exit 0, or write diagnostic to stderr and exit 1 if not found, or if `QUADLET_BIN` set to non-executable value.
 
 | Check | Command | Expected | On failure |
 |---|---|---|---|
-| Podman version | `podman --version` | version `>= 5.0` | **ABORT** — name the found version and the required minimum (5.0) |
-| Rootless id mappings | `podman info --format '{{.Host.IDMappings.UIDMap}}'` | a non-empty mapping | **ABORT** — subuid/subgid are not configured for this user |
-| Linger | `loginctl show-user "$USER" -p Linger` | `Linger=yes` | **ASK** before running `loginctl enable-linger "$USER"`; without linger the service stops when the user logs out |
-| Quadlet unit dir | see "Unit directory writability" below | directory (or its parent, if not yet created) is writable | not an abort — **CREATE** with `mkdir -p` when missing; **ABORT** if the writability probe fails |
-| Quadlet generator | `scripts/find-quadlet.sh` (from the skill directory) | prints an absolute path on stdout, exit 0 | **ABORT** — exit 1 means neither `.container` generation nor linting is possible; report the script's stderr diagnostic |
-| systemd user manager | see "systemd user manager" below | stdout is exactly `running` or `degraded` | **ABORT** — stdout is anything else, including empty (a connection failure to the user bus) |
-| Cgroups version | `podman info --format '{{.Host.CgroupsVersion}}'` | `v2` | **WARN** — see "Cgroups v1 and resource limits" below; R9's limits will not be enforced |
-| Free space | `df -h --output=avail "$HOME" \| tail -1` | enough free space for the image and its data | **WARN** and ask the operator whether to continue if space looks insufficient for the service being installed |
+| Podman version | `podman --version` | version `>= 5.0` | **ABORT** - name found version and required minimum (5.0) |
+| Rootless id mappings | `podman info --format '{{.Host.IDMappings.UIDMap}}'` | non-empty mapping | **ABORT** - subuid/subgid not configured for this user |
+| Linger | `loginctl show-user "$USER" -p Linger` | `Linger=yes` | **ASK** before running `loginctl enable-linger "$USER"`; without linger service stop when user log out |
+| Quadlet unit dir | see "Unit directory writability" below | dir (or parent, if not yet created) writable | not abort - **CREATE** with `mkdir -p` when missing; **ABORT** if writability probe fail |
+| Quadlet generator | `scripts/find-quadlet.sh` (from skill dir) | print absolute path on stdout, exit 0 | **ABORT** - exit 1 mean neither `.container` generation nor linting possible; report script stderr diagnostic |
+| systemd user manager | see "systemd user manager" below | stdout exactly `running` or `degraded` | **ABORT** - stdout anything else, including empty (connection failure to user bus) |
+| Cgroups version | `podman info --format '{{.Host.CgroupsVersion}}'` | `v2` | **WARN** - see "Cgroups v1 and resource limits" below; R9 limits not enforced |
+| Free space | `df -h --output=avail "$HOME" \| tail -1` | enough free space for image and its data | **WARN** and ask operator whether to continue if space look insufficient for service being installed |
 
 ## Unit directory writability
 
-`ls -d` only proves the directory exists; it says nothing about whether it
-can be written to, and the workflow needs to write `.container` files into
-it. Probe writability directly, checking the parent directory instead when
-the unit directory itself does not exist yet (it will be created there):
+`ls -d` only prove dir exist; say nothing about whether writable, and workflow need write `.container` files into it. Probe writability direct, check parent dir instead when unit dir not exist yet (will be created there):
 
 ```bash
 dir="${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
@@ -56,32 +35,22 @@ else
 fi
 ```
 
-If the directory exists, `test -w "$dir"` must succeed. If it does not
-exist yet, `test -w` on its parent must succeed before `mkdir -p` is run;
-a read-only parent is a real failure worth catching here rather than
-during installation.
+If dir exist, `test -w "$dir"` must succeed. If not exist yet, `test -w` on parent must succeed before `mkdir -p` run; read-only parent is real failure worth catching here, not during install.
 
 ## systemd user manager
 
-`systemctl --user is-system-running` exits 1 for both `degraded` (harmless
-— some unrelated user unit has failed) and for a genuinely unreachable
-user bus, so the exit status alone cannot distinguish an acceptable system
-from a broken one. Make the decision on stdout content instead:
+`systemctl --user is-system-running` exit 1 for both `degraded` (harmless - some unrelated user unit failed) and genuinely unreachable user bus, so exit status alone cannot distinguish acceptable system from broken one. Decide on stdout content instead:
 
 ```bash
 state="$(systemctl --user is-system-running 2>/dev/null)"
 case "$state" in
   running|degraded) : ;;  # PASS
-  *) : ;;                 # ABORT — includes a connection failure, where $state is empty
+  *) : ;;                 # ABORT - includes a connection failure, where $state is empty
 esac
 ```
 
 - `state` is `running` or `degraded` → pass, continue preflight.
-- `state` is anything else, including empty (which happens when the user
-  bus cannot be reached — `systemctl` then prints nothing to stdout and a
-  diagnostic such as `Failed to connect to user scope bus...` to stderr) →
-  **ABORT**, naming the unexpected state (or "user bus unreachable" when
-  `state` is empty) and, if available, the stderr diagnostic.
+- `state` anything else, including empty (happens when user bus unreachable - `systemctl` then print nothing to stdout and diagnostic like `Failed to connect to user scope bus...` to stderr) → **ABORT**, naming unexpected state (or "user bus unreachable" when `state` empty) and, if available, stderr diagnostic.
 
 ## Cgroups v1 and resource limits
 
@@ -89,48 +58,19 @@ esac
 podman info --format '{{.Host.CgroupsVersion}}'
 ```
 
-Expected `v2`. Anything else (`v1`) is a **WARN**, not an ABORT: the service
-will install and run normally. What it will not do is enforce its limits.
+Expect `v2`. Anything else (`v1`) is **WARN**, not ABORT: service install and run normal. What it not do is enforce limits.
 
-Rootless Podman cannot delegate cgroup controllers on cgroups v1, so
-`Memory=`, `PidsLimit=` and `PodmanArgs=--cpus=` are **accepted, warned
-about, and then ignored**. Podman prints a note along the lines of
-"Resource limits are not supported and ignored on cgroups V1 rootless
-systems" and starts the container unrestricted. Nothing downstream catches
-this: the Quadlet generator converts those keys happily, so
-`scripts/validate.sh` reports R9 as satisfied and the unit passes its lint
-while enforcing no limit at all.
+Rootless Podman cannot delegate cgroup controllers on cgroups v1, so `Memory=`, `PidsLimit=` and `PodmanArgs=--cpus=` are **accepted, warned about, then ignored**. Podman print note like "Resource limits are not supported and ignored on cgroups V1 rootless systems" and start container unrestricted. Nothing downstream catch this: Quadlet generator convert those keys happily, so `scripts/validate.sh` report R9 satisfied and unit pass lint while enforcing no limit at all.
 
-Say this to the operator plainly rather than reporting R9 as met: on this
-host the memory, PID and CPU limits in the unit are documentation, not
-enforcement, and one misbehaving container can exhaust the host's memory or
-PID table. The fix is a host with cgroups v2 (unified hierarchy) or a
-rootful installation; neither is something this skill changes on its own.
-Keep the R9 keys in the unit regardless — they cost nothing, they are
-correct, and they take effect as written the moment the host moves to v2.
+Say this to operator plain, not report R9 as met: on this host memory, PID and CPU limits in unit are documentation, not enforcement, and one misbehaving container can exhaust host memory or PID table. Fix is host with cgroups v2 (unified hierarchy) or rootful install; neither is something this skill change on its own. Keep R9 keys in unit regardless - cost nothing, correct, and take effect as written moment host move to v2.
 
 ## Notes on interpreting results
 
-- **ABORT** means: stop the workflow now, state which check failed and why,
-  and do not create or modify any files. The operator must fix the
-  underlying condition (upgrade Podman, configure subuid/subgid, install
-  the Quadlet generator package, fix the systemd user session) and re-run
-  preflight from the top.
-- **ASK** means: stop and get an explicit yes/no from the operator before
-  taking the associated action. Do not run `loginctl enable-linger`
-  without confirmation.
-- **CREATE** means: this is expected on a first run and is not a failure.
-  Most systems will not have `containers/systemd` under the config
-  directory until the first Quadlet unit is installed; create it with
-  `mkdir -p` and continue.
-- **WARN** means: surface the concern to the operator and ask whether to
-  continue; it does not stop the workflow on its own.
+- **ABORT** mean: stop workflow now, state which check failed and why, create or modify no files. Operator must fix underlying condition (upgrade Podman, configure subuid/subgid, install Quadlet generator package, fix systemd user session) and re-run preflight from top.
+- **ASK** mean: stop and get explicit yes/no from operator before taking associated action. Do not run `loginctl enable-linger` without confirmation.
+- **CREATE** mean: expected on first run, not failure. Most systems not have `containers/systemd` under config dir until first Quadlet unit installed; create with `mkdir -p` and continue.
+- **WARN** mean: surface concern to operator and ask whether to continue; does not stop workflow on its own.
 
 ## Minimum Podman version
 
-The skill requires Podman **5.0** or newer (Quadlet's `.container`/`.volume`
-unit support and the `[Container]` keys used by the generated templates
-depend on it). Preflight enforces this by parsing the output of
-`podman --version` and comparing against `5.0` — never assume or state
-which version is installed on any particular machine; only compare against
-the declared minimum at run time.
+Skill require Podman **5.0** or newer (Quadlet `.container`/`.volume` unit support and `[Container]` keys used by generated templates depend on it). Preflight enforce by parsing `podman --version` output and comparing against `5.0` - never assume or state which version installed on any particular machine; only compare against declared minimum at run time.
