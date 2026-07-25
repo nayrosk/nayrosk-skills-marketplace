@@ -67,6 +67,7 @@ check "conformant fixture validates" 0 "$VALIDATE" "$(render "$HERE/fixtures/con
 # does not sweep them in; each is asserted explicitly instead.
 check "latest-slim tag is not falsely rejected (R1)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-latest-slim.container")"
 check "NO-HEALTHCHECK exemption is honoured (R5)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-no-healthcheck.container")"
+check "CRLF line endings are not falsely rejected" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-crlf.container")"
 
 for f in "$HERE"/fixtures/violation-*.container; do
   rule="$(basename "$f" | sed -E 's/^violation-(r[0-9]+)-.*/\1/' | tr 'a-z' 'A-Z')"
