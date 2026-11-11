@@ -1,6 +1,6 @@
 # Conventions
 
-Thirteen conventions. Every Quadlet unit from this skill must follow. Each rule got stable ID (`R1`..`R13`). `scripts/validate.sh` use ID as violation prefix (e.g. `R1: ...`). Conformance checklist in `SKILL.md` use too. IDs never renumbered, merged, reused.
+Fourteen conventions. Every Quadlet unit from this skill must follow. Each rule got stable ID (`R1`..`R14`). `scripts/validate.sh` use ID as violation prefix (e.g. `R1: ...`). Conformance checklist in `SKILL.md` use too. IDs never renumbered, merged, reused.
 
 Examples below use `%HOME%` as stand-in for user home dir: `%HOME%` mean value of `$HOME`, resolved to absolute path at generation time. Quadlet own `%h` specifier deliberately **not** used anywhere in generated units - R11 forbid it, plus `~` and any other relative or unresolved path form.
 
@@ -280,6 +280,12 @@ PodmanArgs=--cpus=1.0
 
 Why: unbounded container starve host of memory or exhaust PID table. Explicit limits keep one service misbehavior from taking down rest of machine.
 
+### Sizing: every limit has a source
+
+Validator only check limits exist; value is a decision. Take it from the image needs profile (`SKILL.md` step 1), in this order: upstream Helm chart `resources.limits` (or `requests` with margin), then upstream docs, then the template values (`512m` / `256` / `1.0`) labelled `guess` at the gate. Never present a guess as a fact.
+
+Step 9 measure it: peak memory and PIDs from `podman stats` during the functional probe. Peak above 80% or below 20% of a limit: propose a new value, operator approve, write measurement and before/after values in `docs/install.md`. One-shot probe is not load: runbook say so.
+
 Memory and PID limits set with native keys only. `scripts/validate.sh` reject `-m`, `--memory`, `--pids-limit` in `PodmanArgs=`, in every form Quadlet accept (quoted, `\`-continued, `=`-separated, or value attached direct to short option, like `-m512m`) - same reason R8 reject `-v` there. `--cpus=` = one deliberate exception, because Quadlet got no native key for it.
 
 ❌ Also incorrect - native key bypassed through `PodmanArgs=`
@@ -298,7 +304,7 @@ Not rule, but failure it cause easy to misdiagnose as broken image. Template `Dr
 exec container process `/usr/bin/<binary>`: Operation not permitted
 ```
 
-Common for web servers built to bind ports below 1024 (`cap_net_bind_service=ep` on entrypoint binary). Happen even when container never asked to bind privileged port. Check image before blaming it:
+Common for web servers built to bind ports below 1024 (`cap_net_bind_service=ep` on entrypoint binary). Happen even when container never asked to bind privileged port. Not the same problem as the host refusing a port below 1024 to rootless Podman (`net.ipv4.ip_unprivileged_port_start`, see `references/networking.md` "Privileged ports"); both can apply at once. Check image before blaming it (workflow step 1 profile already run `getcap` from host on mounted image; command below for when it did not):
 
 ```bash
 # same --userns= as the unit (hosts defaulting to userns=auto may otherwise
@@ -476,3 +482,41 @@ A marker turns a silent default into a reviewed decision that names its
 evidence, so a later image bump can re-test it and drop the exception. The
 marker must name the key, so one generic comment cannot cover several
 relaxations.
+
+## R14 - No outbound network unless justified
+
+Unit get no outbound access by default. Conformant when **every** `Network=` is `none` or sibling `<x>.network` Quadlet unit whose last `[Network]` `Internal=` is true (`true`/`yes`/`1`/`on`), or when unit carry marker with non-empty reason:
+
+```ini
+# EGRESS: <what the app reaches outside, and the evidence>
+```
+
+`:options` after network name ignored (`Network=x.network:ip=...` judged by `x.network`). Network never set through `PodmanArgs=--network`/`--net`: rejected, marker or not.
+
+✅ Correct
+```ini
+Network=<SERVICE_NAME>.network   # sibling unit has Internal=true
+```
+```ini
+Network=none
+```
+```ini
+# EGRESS: Caddy obtains certificates from Let's Encrypt (ACME)
+Network=caddy.network
+```
+
+❌ Incorrect
+```ini
+# no Network= at all: rootless default network has egress
+Network=podman                   # no marker
+Network=host                     # no marker
+Network=proxy.network            # not a sibling file: Internal= unknown, needs marker
+# EGRESS:
+PodmanArgs=--cpus=1.0 --network=host
+```
+
+All-or-nothing: `Internal=true` cut internet, LAN **and** host. Service that only need NAS or LAN database get full egress via marker. Narrower scope (LAN-only, allow list) need host firewall changes, out of scope.
+
+Egress earned like hardening exception: decide from image needs profile (ACME, webhooks, plugin/model downloads, external APIs, telemetry); nothing found = no egress; app fail at step 8 because of it = show evidence, add marker, re-validate, report.
+
+Why: compromised service with no route out cannot exfiltrate data, pull second stage, or join botnet. Most self-hosted backends (databases, caches, internal APIs) never need internet. Marker turn silent default into reviewed decision, same as R13.

@@ -51,23 +51,30 @@ Secret=<SECRET_NAME>,type=env,target=<VAR_NAME>
 Volume=<HOME>/.<SERVICE_NAME>/data:<CONTAINER_DATA_PATH>:Z
 Volume=<HOME>/.<SERVICE_NAME>/config:<CONTAINER_CONFIG_PATH>:ro,Z
 
-# Network placement (references/networking.md). Use ONE of:
-#   - Network=<SERVICE_NAME>.network  for the `internal` decision, or for a
-#     service that also needs a named network others can reach it on. The
-#     matching <SERVICE_NAME>.network unit must be installed alongside this
-#     file, or the Quadlet generator refuses to convert this unit.
-#   - Network=<REVERSE_PROXY_NETWORK>  for `public-noauth` / `public-auth` /
-#     `monitoring`, joining the existing proxy's network.
-#   - delete the line entirely to use Podman's default rootless network.
-Network=<NETWORK>
+# Network placement (references/networking.md) and R14 egress.
+# Default for EVERY placement: the service's own internal network. The
+# matching <SERVICE_NAME>.network unit (Internal=true) must be installed
+# alongside this file, or the Quadlet generator refuses to convert it.
+# A reverse proxy reaches the service by JOINING this network (one more
+# Network= line in the proxy's unit); the service never joins the proxy's.
+# Exceptions, each needing a marker line written exactly as
+#   "# EGRESS: <what the app reaches outside, and the evidence>"
+# placed above Network= (this comment block deliberately does not match it):
+#   - the service really needs outbound access (ACME, webhooks, downloads,
+#     external APIs), proven by the image needs profile or by a step 8 failure;
+#   - the proxy is not a Quadlet unit: Network=<REVERSE_PROXY_NETWORK>.
+# Network=none is also valid (no network at all, no marker needed).
+# Never set the network in PodmanArgs= (R14 rejects it).
+Network=<SERVICE_NAME>.network
 
 # Published ports. Only for the `loopback` decision (and for a reverse
 # proxy's own front door). ALWAYS bind an explicit address: a bare
 # `PublishPort=<PORT>:<CONTAINER_PORT>` listens on every interface.
 # socket profile: this is the INTERNAL backend port; systemd's
 # <SERVICE_NAME>-proxy.socket owns the public one.
-# DELETE this line for the `internal` decision and for any service reached
-# only through a reverse proxy on a shared network.
+# Works on an Internal=true network (verified on rootless Podman 6.1.4,
+# pasta). DELETE this line for the `internal` decision and for any service
+# reached only through a reverse proxy.
 PublishPort=127.0.0.1:<PORT>:<CONTAINER_PORT>
 
 # R5 - healthcheck. Write $$ for every shell $ (systemd expands a single $

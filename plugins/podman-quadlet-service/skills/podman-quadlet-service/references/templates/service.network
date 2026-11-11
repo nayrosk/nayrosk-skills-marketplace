@@ -1,11 +1,16 @@
-# <SERVICE_NAME> internal network.
-# Used when the service must not be reachable from outside the host.
+# <SERVICE_NAME> network (default for every service, R14).
+# Internal: no egress. A reverse proxy reaches the service by joining it.
 
 [Unit]
 Description=<SERVICE_NAME> internal network
 
 [Network]
 NetworkName=<SERVICE_NAME>
+# R14: no outbound access (internet, LAN and host). Containers on this
+# network still reach each other by name, and PublishPort=127.0.0.1:...
+# still works. Removing this line requires a "# EGRESS: <reason>" marker
+# in every .container that joins the network.
+Internal=true
 # Stopping this unit's generated service (<SERVICE_NAME>-network.service)
 # removes the network via a generated ExecStopPost, mirroring the container
 # unit's own generated ExecStop/ExecStopPost (podman rm), which already
