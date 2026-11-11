@@ -37,9 +37,20 @@ podman secret rm <SECRET_NAME>
 podman rmi <REGISTRY>/<IMAGE>:<TAG>
 ```
 
-If this service was installed with the `internal` network placement
-(`references/networking.md`), a dedicated `<SERVICE_NAME>.network` unit
-also exists - remove it too, and only **after** the container above is
+If a reverse proxy reaches this service by joining its network
+(`references/networking.md`, "Proxy topology"), remove that join **first**,
+or the proxy fails on its next start because the network unit is gone.
+Ask the operator, back up the proxy unit, then:
+
+```bash
+# Delete the line `Network=<SERVICE_NAME>.network` from the proxy unit:
+#   ${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/<PROXY_NAME>.container
+systemctl --user daemon-reload
+systemctl --user restart <PROXY_NAME>
+```
+
+The service's own `<SERVICE_NAME>.network` unit (every v3 service has
+one, R14) must be removed too, and only **after** the container above is
 already gone. The container's own generated unit removes the container on
 stop (`podman rm`), so stopping it first guarantees nothing is still
 attached to the network when the network is torn down next; stopping the

@@ -15,7 +15,7 @@ description: >
 
 Install a containerized service as a rootless Podman Quadlet unit that is
 **pinned, least-privilege, observable, and alive only when it should be**.
-`references/conventions.md` (R1-R13) is the contract, and
+`references/conventions.md` (R1-R14) is the contract, and
 `scripts/validate.sh` enforces it mechanically. Podman **5.0**+; preflight
 checks the real version.
 
@@ -48,6 +48,32 @@ relaxed "until it works" with no record of why.
    Podman's image store only and creates no service artifact, so it is
    allowed before the gate (step 4 re-verifies it). Then, for the pinned
    digest:
+   - **Image needs profile:** work out what *this* image needs, generically
+     (no per-image recipes), from two sources, and record each finding with
+     its source.
+     - *Inspect:* `podman image inspect` for `Config.ExposedPorts`,
+       `Config.User`, `Config.Volumes`, `Entrypoint`/`Cmd`, `StopSignal`,
+       `Env` names (hints only, never values to copy), and the OCI labels
+       `org.opencontainers.image.source`/`.documentation`/`.url` as research
+       starting points. File capabilities with the **host's** `getcap`, so
+       the image needs no tool of its own:
+       `podman unshare sh -c 'm=$(podman image mount <REF>@sha256:<DIGEST>);
+       getcap -r "$m"; podman image unmount <REF>@sha256:<DIGEST>'`
+       (no `getcap` on the host: "not checked").
+     - *Research:* upstream docs, the project's compose file, and the
+       official or most-used Helm chart: ports, writable paths, **outbound
+       needs** (ACME, webhooks, plugin/model downloads, external APIs,
+       telemetry), shutdown behaviour, and resources (Helm
+       `resources.limits` preferred, conventions R9 "Sizing").
+     - *Output:* a table with rows ports, privileged host ports, user/UID,
+       volumes, file capabilities, egress, memory, CPU, PIDs, stop path, and
+       columns value and source (`inspect`, `docs <url>`, `compose <url>`,
+       `helm <url>`, `guess`). A guess is labelled `guess`, never presented
+       as a fact.
+     - *Privileged ports:* a wanted host port below
+       `sysctl -n net.ipv4.ip_unprivileged_port_start` is an **ASK**
+       (`references/networking.md` "Privileged ports"). Print the commands;
+       never run them.
    - **Supply chain (R1):** `cosign verify` if upstream signs and cosign is
      present (`cosign tree <ref>` first: it shows whether any signature or
      attestation exists at all); `trivy`/`grype` scan if present. Scan an
@@ -83,7 +109,11 @@ relaxed "until it works" with no record of why.
    - **Hardening needs (R13):** start from the full baseline. Expect to
      relax nothing; relax only what you then prove necessary in step 8.
    - **Network placement:** `references/networking.md` (`public-noauth`,
-     `public-auth`, `monitoring`, `loopback`, `internal`).
+     `public-auth`, `monitoring`, `loopback`, `internal`). Every placement
+     uses the service's own `Internal=true` network (R14); a reverse proxy
+     joins it, never the reverse. **Egress** only when the profile found an
+     outbound need, with a `# EGRESS: <reason>` marker. Egress is
+     all-or-nothing: it also opens the LAN and the host.
 
 2. **Classify the lifecycle** with `references/lifecycle.md`: `daemon`,
    `on-demand`, `socket` or `job`. Who starts the work, and what ends it?
@@ -93,8 +123,10 @@ relaxed "until it works" with no record of why.
 > Present: image, tag, digest, why this version, signature and scan
 > results (or "not available"), **lifecycle profile and why**, stop path
 > (Exec override? RunInit? StopTimeout?), planned hardening exceptions
-> (should normally be none yet), network placement, volumes, resource
-> limits, and for `on-demand` every client config that will be repointed
+> (should normally be none yet), the **image needs profile table** with
+> sources, network placement, **egress decision** (none, or the marker
+> reason), privileged-port choice if any, the proxy unit edit if any,
+> volumes, resource limits and their source, and for `on-demand` every client config that will be repointed
 > at the wrapper. **Write nothing to disk until the operator approves.**
 
 3. **Create the local tree** - `$HOME/.<SERVICE_NAME>/` with `data/`,
@@ -131,7 +163,11 @@ relaxed "until it works" with no record of why.
      `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/` (wrapper:
      `$HOME/.local/bin/<SERVICE_NAME>-client`, mode 0755), then `systemctl --user daemon-reload`.
    - Write the reverse-proxy route for `public-*`/`monitoring`
-     (`references/networking.md`).
+     (`references/networking.md`). Proxy is a Quadlet unit: **ASK**, back
+     it up, add `Network=<SERVICE_NAME>.network` to it, `daemon-reload`,
+     restart it. Proxy is not a Quadlet unit: the service joins the proxy's
+     network instead, with `# EGRESS: proxy not Quadlet-managed`, and offer
+     to reinstall the proxy with this skill.
    - Smoke-start it. `daemon`/`job`: `systemctl --user start
      <SERVICE_NAME>`. `on-demand`/`socket`: a bare `start` is stopped again
      within a second by `StopWhenUnneeded=yes`, which is a false failure.
@@ -148,6 +184,10 @@ relaxed "until it works" with no record of why.
      `# HARDENING-EXCEPTION: <Key> - <evidence>` marker, re-validate, and
      report it back to the operator. `exec ...: Operation not permitted` is
      the file-capability case (conventions R9 note), not a broken image.
+   - **Egress is earned the same way:** a failure traced to the missing
+     route out (DNS or connect errors to an external host) gets the
+     evidence, a `# EGRESS: <what it reaches> - <evidence>` marker,
+     re-validation, and a report to the operator.
    - Then arm the profile: `daemon` - `systemctl --user enable`; `on-demand`
      - repoint each approved client config at the wrapper (back up each
      file first; a client config that does not exist yet is created only
@@ -157,6 +197,12 @@ relaxed "until it works" with no record of why.
 9. **Verify** - all of these, with output shown:
    - functional probe of the service, and through the proxy route if any;
    - the **R12 stop test** (`Result=success`, never `ExecMainStatus=137`);
+   - **resource measurement:** sample
+     `podman stats --no-stream --format '{{.MemUsage}} {{.PIDs}}' <SERVICE_NAME>`
+     during the functional probe and keep the peak. Peak above 80% or below
+     20% of `Memory=`/`PidsLimit=`: propose a new value, apply it only after
+     the operator agrees, regenerate and re-validate. A one-shot probe is not
+     real load; say so in `install.md`;
    - the **lifecycle checks** from `references/lifecycle.md` Step 4 (e.g.
      on-demand: inactive, then active under a wrapper, then inactive after
      it exits, `NRestarts=0`).
@@ -180,6 +226,10 @@ relaxed "until it works" with no record of why.
 | "Relax seccomp/caps/ReadOnly now so it starts, tighten later" | Later never comes. Start fully hardened and relax one tested key at a time with a marker (step 8). |
 | "Tag pinning is enough" | Tags are re-pushable. R1 requires the digest. |
 | "It started, so it works" | Not verified until the stop test and lifecycle checks pass (step 9). |
+| "Give it network access so it starts" | Egress is earned like a hardening exception: evidence, `# EGRESS:` marker, report (R14). |
+| "512m / 256 / 1.0 is fine" | Every limit has a source or the `guess` label, and step 9 measures it (R9 "Sizing"). |
+| "I'll lower the sysctl / add the firewall rule for them" | Host-wide changes are the operator's. Print the commands, never run them. |
+| "The backend can just join the proxy network" | The proxy has egress (ACME), so the backend would inherit it. The proxy joins the backend's network. |
 | "One client can call the binary directly, it's simpler" | That client neither starts nor holds the on-demand container. Every client goes through the wrapper. |
 
 ## Hard rules
@@ -188,6 +238,10 @@ relaxed "until it works" with no record of why.
   asking. Back up any client config before repointing it.
 - Nothing is written before the approval gate.
 - Never invent a secret value or write one to `.env` or a unit.
+- Never change host-wide settings (sysctl, firewall): print the commands
+  for the operator.
+- Never edit or restart a reverse proxy's unit without asking, and never
+  touch a proxy that is not a Quadlet unit.
 - Never install past a `validate.sh` exit-1. Never edit a unit only to
   silence a check.
 - Never hardcode a path: derive it from `$HOME`/`$XDG_CONFIG_HOME` and
@@ -196,7 +250,7 @@ relaxed "until it works" with no record of why.
 
 ## Conformance
 
-`scripts/validate.sh` checks R1-R13 and runs the Quadlet generator as a
+`scripts/validate.sh` checks R1-R14 and runs the Quadlet generator as a
 linter. Two things need human judgement it cannot make: R10 (prefer the
 app's own JSON log format) and whether each `HARDENING-EXCEPTION` reason is
 real evidence. The validator only checks that one exists. Run

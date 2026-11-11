@@ -35,6 +35,36 @@ carries, or a compatibility constraint>
 └── docs/            # this file and its siblings
 ```
 
+## Image needs profile
+
+Built at install time from local inspection and research (SKILL.md step
+1). Every row names its source: `inspect`, `docs <url>`, `compose <url>`,
+`helm <url>`, or `guess`.
+
+| Need | Value | Source |
+|---|---|---|
+| Ports | <PORTS> | <SOURCE> |
+| Privileged host ports | <none, or port + option chosen: sysctl / high port + redirect / loopback> | <SOURCE> |
+| User / UID | <USER> | <SOURCE> |
+| Volumes / writable paths | <PATHS> | <SOURCE> |
+| File capabilities | <getcap output, or "not checked"> | <SOURCE> |
+| Egress | <none, or what it reaches and the EGRESS marker reason> | <SOURCE> |
+| Memory | <MEM_LIMIT> | <SOURCE> |
+| CPU | <CPU_LIMIT> | <SOURCE> |
+| PIDs | <PIDS_LIMIT> | <SOURCE> |
+| Stop path | <signal, RunInit/PID1, StopTimeout> | <SOURCE> |
+
+## Resource measurement
+
+Peak during the step 9 functional probe (`podman stats --no-stream`),
+taken <DATE>. A one-shot probe is not real load: re-measure under normal
+use and adjust.
+
+| | Limit before | Peak measured | Limit after |
+|---|---|---|---|
+| Memory | <MEM_LIMIT> | <PEAK_MEM> | <NEW_MEM_LIMIT or unchanged> |
+| PIDs | <PIDS_LIMIT> | <PEAK_PIDS> | <NEW_PIDS_LIMIT or unchanged> |
+
 ## Configuration decisions
 
 - **Network placement**: `<NETWORK>` - <which of the five exposure decisions
