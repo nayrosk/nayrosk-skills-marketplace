@@ -12,7 +12,7 @@ podman ps --all --format '{{.Names}}\t{{.Image}}' \
   | grep -Ei 'caddy|traefik|nginx|npm|haproxy' || echo "no reverse proxy found"
 ```
 
-**Reverse proxy found** → use it. Join its network, derive route syntax from its config style (Caddy snippets below if Caddy; else inspect existing config for pattern in use - no second proxy technology on host that already have one).
+**Reverse proxy found** → use it. Proxy join service's internal network ("Proxy topology" below), derive route syntax from its config style (Caddy snippets below if Caddy; else inspect existing config for pattern in use - no second proxy technology on host that already have one).
 
 **None found** → ASK user. Offer three options, let them choose:
 
@@ -26,17 +26,54 @@ Every service land in exactly one of five buckets:
 
 | Decision | Meaning | How it's wired |
 |---|---|---|
-| `public-noauth` | Reachable externally, unauthenticated | Join the reverse proxy network; add the plain route |
-| `public-auth` | Reachable externally, authenticated | Join the reverse proxy network; add the route behind basic auth |
+| `public-noauth` | Reachable externally, unauthenticated | Own internal network; proxy joins it; add the plain route |
+| `public-auth` | Reachable externally, authenticated | Own internal network; proxy joins it; add the route behind basic auth |
 | `monitoring` | Metrics / health endpoints | Reachable on loopback **and** on the authenticated route; **never** publicly unauthenticated |
-| `loopback` | Reachable from this host only, with no proxy in front | `PublishPort=127.0.0.1:<PORT>:<CONTAINER_PORT>`; no route to write |
+| `loopback` | Reachable from this host only, with no proxy in front | Own internal network + `PublishPort=127.0.0.1:<PORT>:<CONTAINER_PORT>`; no route to write |
 | `internal` | No external exposure at all | Dedicated `<SERVICE_NAME>.network` from `service.network`; no `PublishPort=` |
 
 `loopback` = step 1 option 2, own bucket: not `internal` (which publish no host port at all), not `public-*` (nothing routed to it). Right answer whenever operator decline reverse proxy. **Only** correct answer for reverse proxy's own container - proxy is terminus of routing, never routed through itself. Install proxy as `loopback` (or, when it should serve outside world, publish on host's real addresses), route *other* services through it.
 
-`loopback` and `internal` combinable too, and for reverse proxy normally are: publish proxy on loopback **and** give it dedicated `<SERVICE_NAME>.network` from `service.network`, so backends it proxy can join that network and be reached by container DNS name without publishing own ports. Generate both units in that case.
+Every bucket use service's own `<SERVICE_NAME>.network` (`Internal=true`, R14) by default; buckets differ only in what reach it (proxy, loopback port, nothing). Reverse proxy itself: publish on loopback (or host's real addresses) and keep `# EGRESS:` marker (ACME); it reach backends by joining **their** networks, never the reverse.
 
 `monitoring` not variant of `public-noauth` - metrics or health endpoint never handed out over public route without auth, even if owning service otherwise `public-noauth`. Route it separately, per monitoring snippet below.
+
+## Proxy topology and egress (R14)
+
+Proxy need egress (ACME). Backend joining proxy's network would inherit it. So direction inverted: **proxy join each backend's internal network**, one extra `Network=<SERVICE_NAME>.network` line in proxy unit. Backend keep no egress. Caddy snippets below unchanged: `reverse_proxy <SERVICE_NAME>:<CONTAINER_PORT>` resolve by container DNS on shared network.
+
+**Proxy is Quadlet unit** (matching `.container` in unit dir): **ASK**, back up proxy unit, add `Network=<SERVICE_NAME>.network`, `systemctl --user daemon-reload`, restart proxy (install step 8). Proxy installed by v2 (no `# EGRESS:` marker): add only that line and proxy's own `# EGRESS: <proxy> obtains certificates via ACME`, run `scripts/validate.sh` on proxy unit, **report** other v2 gaps, fix nothing else (no migration).
+
+**Proxy not Quadlet unit** (found by `podman ps` but no `.container` in unit dir: `podman run`, compose, by hand): cannot edit its networks. Fallback: backend join proxy network as before, with `# EGRESS: proxy not Quadlet-managed`. Offer to reinstall proxy with this skill. Never edit or restart non-Quadlet proxy.
+
+**Uninstall**: before removing backend network, remove its `Network=` line from proxy unit (ASK, backup), `daemon-reload`, restart proxy. Else proxy fail next start (network unit gone).
+
+**Egress all-or-nothing**: `Internal=true` cut internet, LAN and host. Service needing only NAS or LAN database get full egress via marker (R14).
+
+### Verified: loopback publish on internal network
+
+Rootless Podman 6.1.4, netavark, pasta: container on `podman network create --internal` network, run with `-p 127.0.0.1:18765:8000`. From host `curl http://127.0.0.1:18765/` → HTTP 200. From inside, `wget http://1.1.1.1` → `Network is unreachable`. So `loopback` = internal network + `PublishPort=127.0.0.1:...`; `socket` profile's proxyd reach backend port same way. **Not verified on Podman 5.x.** If step 9 probe show loopback port unreachable on a host: fallback `# EGRESS: loopback publish unsupported on Podman <version>`, report to operator.
+
+## Privileged ports
+
+Rootless Podman cannot publish host port below `net.ipv4.ip_unprivileged_port_start` (default 1024), via `PublishPort=` or `Network=host` (host netns, same sysctl). Check when placement want such port (Caddy on 80/443):
+
+```bash
+sysctl -n net.ipv4.ip_unprivileged_port_start
+```
+
+Value > wanted port → **ASK**, offer three options. Skill print commands, never run them (host-wide, root):
+
+1. Lower sysctl, persistent:
+   ```bash
+   echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee /etc/sysctl.d/90-unprivileged-ports.conf
+   sudo sysctl --system
+   ```
+   Host-wide: any user process can then bind 80+.
+2. Publish high port (e.g. `8443`, `8080`) and redirect with host firewall (operator write rule for their firewall: nftables/firewalld).
+3. Stay `loopback`, no public port.
+
+Distinct from file-capability case (binary carry `cap_net_bind_service=ep`, conventions R9 note, R13 `AddCapability=NET_BIND_SERVICE` exception). Profile `getcap` output decide that one. Both can apply at once.
 
 ## Step 3: Caddy route snippets
 

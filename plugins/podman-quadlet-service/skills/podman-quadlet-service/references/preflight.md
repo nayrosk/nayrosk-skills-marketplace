@@ -23,8 +23,8 @@ Quadlet generator never referenced by literal path (lives in different places ac
 
 ## Profile-gated checks
 
-Some checks depend on the lifecycle profile (`references/lifecycle.md`),
-which is only known after workflow step 1. Run them right after
+Some checks depend on the lifecycle profile (`references/lifecycle.md`)
+or the network placement, which are only known after workflow step 1. Run them right after
 classification, **before** the approval gate. They change nothing
 persistent (the scope probe is a transient unit, gone when it exits).
 
@@ -36,6 +36,8 @@ persistent (the scope probe is a transient unit, gone when it exits).
 | `socket` | Socket proxy | `for p in /usr/lib/systemd/systemd-socket-proxyd /lib/systemd/systemd-socket-proxyd; do [ -x "$p" ] && echo "$p" && break; done` | absolute path printed | **ABORT** for `socket`; the printed path fills `<SOCKET_PROXYD>` |
 | `socket` | Port free | `ss -Hltn "sport = :<PUBLIC_PORT>"` and same for `<BACKEND_PORT>` | empty output | **ABORT** - name the listener (`ss -Hltnp`) |
 | any | Supply-chain tools | `command -v cosign trivy grype` | any subset | **INFO** - list what exists; workflow step 1 uses them when present, never installs them |
+| any, with a host port < 1024 | Privileged ports | `sysctl -n net.ipv4.ip_unprivileged_port_start` | value <= lowest wanted host port | **ASK** - `references/networking.md` "Privileged ports"; print commands, never run them |
+| any | File capabilities probe | `command -v getcap` | path printed | **INFO** - absent: image needs profile reports file capabilities as "not checked" |
 
 ## Unit directory writability
 
