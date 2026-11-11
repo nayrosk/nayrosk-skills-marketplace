@@ -469,6 +469,13 @@ else
         sib="$(dirname "$unit")/$name"
         if [ ! -f "$sib" ]; then egress_via+=("Network=$name (not a sibling unit, Internal= unknown)")
         elif ! network_internal "$sib"; then egress_via+=("Network=$name (not Internal=true)")
+        # Quadlet creates the network with `podman network create --ignore`:
+        # a NetworkName= that already exists is silently REUSED as is, so
+        # Internal=true is not applied. `podman` (the default network) always
+        # exists and is never internal. Other clashes are runtime state and
+        # are caught by the SKILL.md step 9 `podman network inspect` check.
+        elif [ "$(awk -F= '/^[ \t]*NetworkName[ \t]*=/ {v=$2} END {gsub(/^[ \t]+|[ \t\r]+$/, "", v); print v}' "$sib")" = "podman" ]; then
+          egress_via+=("Network=$name (NetworkName=podman reuses the default network)")
         fi ;;
       *) egress_via+=("Network=$name") ;;
     esac
@@ -481,8 +488,9 @@ if [ "$egress_marker" -eq 0 ]; then
 fi
 while IFS= read -r val; do
   [ -z "$val" ] && continue
-  printf '%s' "$(dequote "$val")" | grep -qE -- '(^|[[:space:]])--net(work)?([[:space:]=]|$)' \
-    && fail R14 "PodmanArgs= must not set the network, use Network=: $val"
+  # --pod joins a pod's network namespace, bypassing Network= entirely.
+  printf '%s' "$(dequote "$val")" | grep -qE -- '(^|[[:space:]])--(net|network|pod)([[:space:]=]|$)' \
+    && fail R14 "PodmanArgs= must not set the network or pod, use Network=: $val"
 done <<< "$(get_all PodmanArgs Container)"
 
 # The Quadlet generator must accept the unit.

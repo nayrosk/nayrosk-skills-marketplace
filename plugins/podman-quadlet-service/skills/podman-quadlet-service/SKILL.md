@@ -197,6 +197,13 @@ relaxed "until it works" with no record of why.
 9. **Verify** - all of these, with output shown:
    - functional probe of the service, and through the proxy route if any;
    - the **R12 stop test** (`Result=success`, never `ExecMainStatus=137`);
+   - **egress check (R14):** for every internal network the unit joins,
+     `podman network inspect <NetworkName> --format '{{.Internal}}'` must
+     print `true`. Quadlet creates networks with `--ignore`, so an existing
+     non-internal network with the same name (e.g. one left by a v2
+     install) is silently reused and the validator cannot see it. `false`:
+     stop the service, `podman network rm` that network only after the
+     operator agrees, restart, re-check;
    - **resource measurement:** sample
      `podman stats --no-stream --format '{{.MemUsage}} {{.PIDs}}' <SERVICE_NAME>`
      during the functional probe and keep the peak. Peak above 80% or below
