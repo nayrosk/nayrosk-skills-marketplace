@@ -15,6 +15,22 @@ installs and starts it under a user systemd session, verifies it is healthy,
 and writes runbooks documenting exactly what was installed and how to
 maintain it.
 
+## What's new in 3.0.0
+
+- **Image needs profile**: before the approval gate the skill inspects the
+  pinned image (ports, user, volumes, file capabilities via the host's
+  `getcap`) and researches upstream docs, compose files and Helm charts.
+  Every finding is shown with its source, guesses labelled as such.
+- **Privileged ports**: a host port below
+  `net.ipv4.ip_unprivileged_port_start` stops the workflow with three
+  options; the skill prints host-wide commands and never runs them.
+- **Resource sizing**: limits come from a source, then are measured during
+  verification and adjusted with the operator.
+- **Default-deny egress (R14, breaking)**: every service gets its own
+  `Internal=true` network; a reverse proxy joins the service's network
+  instead of the reverse. Units accepted by v2 that use the default network
+  or `Network=podman` without an `# EGRESS:` marker now fail validation.
+
 ## Requirements
 
 - Podman >= 5.0
@@ -80,6 +96,7 @@ Every unit declares when its container should exist (see
 | R11 | All paths absolute and canonical - no `~`, no `%h`, no relative paths |
 | R12 | Graceful stop: `StopTimeout=`, `TimeoutStopSec=` greater than it, `RunInit=true` (or a `# PID1:` justification); `SuccessExitStatus=` never accepts SIGKILL/137 |
 | R13 | Hardening baseline (`NoNewPrivileges`, `DropCapability=ALL`, `ReadOnly`, default seccomp/labels); each relaxation needs a keyed `# HARDENING-EXCEPTION: <Key> - <evidence>` marker; no `--privileged`/`--cap-add`/`--security-opt` |
+| R14 | No outbound network unless justified: every `Network=` is `none` or a sibling `.network` with `Internal=true`, or the unit carries an `# EGRESS: <reason>` marker; never `--network` in `PodmanArgs=` |
 
 See `skills/podman-quadlet-service/references/conventions.md` for the full rationale and examples behind
 each rule.
@@ -103,7 +120,7 @@ Exit codes:
 
 Exit 1 uses two line prefixes, and both are real failures:
 
-- `R<n>: <message>` - a convention violation (R1..R13)
+- `R<n>: <message>` - a convention violation (R1..R14)
 - `LINT: <message>` - the Quadlet generator itself rejected the unit
 
 Grepping only for `^R[0-9]` silently misses every `LINT:` failure. Match both:

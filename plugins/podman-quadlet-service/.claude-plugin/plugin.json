@@ -1,7 +1,7 @@
 {
   "name": "podman-quadlet-service",
-  "description": "Install a containerized service as a rootless Podman Quadlet systemd unit with a deliberate lifecycle (daemon, on-demand, socket-activated, scheduled job), graceful stop, hardened-by-default security, digest-pinned images, podman secrets, healthchecks and reverse-proxy placement, with generated runbooks.",
-  "version": "2.0.0",
+  "description": "Install a containerized service as a rootless Podman Quadlet systemd unit with a deliberate lifecycle (daemon, on-demand, socket-activated, scheduled job), graceful stop, hardened-by-default security, image needs profiling (ports, capabilities, egress, resource sizing from inspection and research), default-deny egress, digest-pinned images, podman secrets, healthchecks and reverse-proxy placement, with generated runbooks.",
+  "version": "3.0.0",
   "author": {
     "name": "Nayrosk",
     "url": "https://github.com/nayrosk"
