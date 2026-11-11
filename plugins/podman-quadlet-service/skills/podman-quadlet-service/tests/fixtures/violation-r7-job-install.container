@@ -1,4 +1,5 @@
 # LIFECYCLE: job
+# EGRESS: test fixture, egress is not what this case tests
 [Unit]
 Description=fixture
 

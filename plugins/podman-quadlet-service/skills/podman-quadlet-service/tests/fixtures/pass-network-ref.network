@@ -3,4 +3,5 @@ Description=fixture internal network
 
 [Network]
 NetworkName=fixture
+Internal=true
 NetworkDeleteOnStop=true

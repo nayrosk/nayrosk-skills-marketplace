@@ -4,7 +4,7 @@
 # Exit 0 when conformant ("conformant" is printed).
 # Exit 1 otherwise, with one diagnostic line per problem, on two possible
 # prefixes:
-#   "R<n>: <message>"  - a convention violation (R1..R13, references/conventions.md)
+#   "R<n>: <message>"  - a convention violation (R1..R14, references/conventions.md)
 #   "LINT: <message>"  - the Quadlet generator itself rejected the unit
 # A consumer that only greps "^R[0-9]+:" will miss LINT failures; match
 # "^(R[0-9]+|LINT):" to see every reason for a non-zero exit.
@@ -429,6 +429,60 @@ while IFS= read -r val; do
   dq="$(dequote "$val")"
   printf '%s' "$dq" | grep -qE -- '(^|[[:space:]])--(privileged|cap-add|security-opt)([[:space:]=]|$)' \
     && fail R13 "PodmanArgs= must not carry --privileged/--cap-add/--security-opt, use native keys: $val"
+done <<< "$(get_all PodmanArgs Container)"
+
+# R14 - no outbound network unless justified. Egress is all-or-nothing:
+# a unit has none only when EVERY Network= it joins is `none` or a sibling
+# <x>.network Quadlet unit whose last [Network] Internal= is a systemd true
+# value. No Network= at all means the rootless default network, which has
+# egress; so do host, pasta, slirp4netns, podman, bridge, container:, ns:,
+# a bare network name, and a <x>.network that is not a sibling file (its
+# Internal= cannot be checked, e.g. an existing proxy network). Any of
+# those needs `# EGRESS: <reason>` with a non-empty reason. `:options`
+# after the network name (Network=x.network:ip=...) are ignored.
+# The network must never be set through PodmanArgs= (invisible to this
+# check and to a reader), marker or not.
+egress_marker=0
+tr -d '\r' < "$unit" | grep -qE '^#[[:space:]]*EGRESS:[[:space:]]*[^[:space:]]' && egress_marker=1
+network_internal() { # network_internal <sibling .network file> -> exit 0 if Internal is true
+  awk '
+    { line = $0; gsub(/^[ \t]+|[ \t\r]+$/, "", line) }
+    line == "" || line ~ /^[#;]/ { next }
+    line ~ /^\[.*\]$/ { section = line; next }
+    section == "[Network]" && line ~ /^Internal[ \t]*=/ {
+      v = line; sub(/^[^=]*=[ \t]*/, "", v); v = tolower(v)
+    }
+    END { exit !(v == "1" || v == "yes" || v == "true" || v == "on") }
+  ' "$1"
+}
+egress_via=()
+networks="$(get_all Network Container)"
+if [ -z "$networks" ]; then
+  egress_via+=("no Network= (rootless default network)")
+else
+  while IFS= read -r net; do
+    [ -z "$net" ] && continue
+    name="${net%%:*}"
+    case "$name" in
+      none) ;;
+      *.network)
+        sib="$(dirname "$unit")/$name"
+        if [ ! -f "$sib" ]; then egress_via+=("Network=$name (not a sibling unit, Internal= unknown)")
+        elif ! network_internal "$sib"; then egress_via+=("Network=$name (not Internal=true)")
+        fi ;;
+      *) egress_via+=("Network=$name") ;;
+    esac
+  done <<< "$networks"
+fi
+if [ "$egress_marker" -eq 0 ]; then
+  for via in "${egress_via[@]+"${egress_via[@]}"}"; do
+    fail R14 "$via gives outbound access without '# EGRESS: <reason>'"
+  done
+fi
+while IFS= read -r val; do
+  [ -z "$val" ] && continue
+  printf '%s' "$(dequote "$val")" | grep -qE -- '(^|[[:space:]])--net(work)?([[:space:]=]|$)' \
+    && fail R14 "PodmanArgs= must not set the network, use Network=: $val"
 done <<< "$(get_all PodmanArgs Container)"
 
 # The Quadlet generator must accept the unit.

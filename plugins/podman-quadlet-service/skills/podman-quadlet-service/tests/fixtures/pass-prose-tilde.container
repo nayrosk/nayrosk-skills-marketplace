@@ -1,4 +1,5 @@
 # LIFECYCLE: daemon
+# EGRESS: test fixture, egress is not what this case tests
 [Unit]
 Description=fixture ~ a great service
 

@@ -1,4 +1,5 @@
 # LIFECYCLE: daemon
+# EGRESS: test fixture, egress is not what this case tests
 # R5 violation: HealthCmd= is present, so the NO-HEALTHCHECK exemption does
 # not apply and every companion key is required - but HealthInterval= is
 # missing. Covers validate.sh's "HealthCmd= present but <key>= missing" arm,

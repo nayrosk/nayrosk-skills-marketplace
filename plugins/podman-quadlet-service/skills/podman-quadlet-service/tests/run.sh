@@ -104,6 +104,12 @@ check "TimeoutStopSec= in minutes is parsed (R12)" 0 "$VALIDATE" "$(render "$HER
 check "EXTERNAL-MOUNT markers allow scoped cross-tree mounts (R8)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-external-mount.container")"
 check "keyed HARDENING-EXCEPTION markers are honoured (R13)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-hardening-exceptions.container")"
 
+# Default-deny egress (R14): each way of having no egress, and the justified
+# marker, must pass.
+check "internal sibling network with options passes (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-internal.container")"
+check "Network=none passes without marker (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-none.container")"
+check "EGRESS marker with reason allows a non-internal network (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-marker.container")"
+
 for f in "$HERE"/fixtures/violation-*.container; do
   rule="$(basename "$f" | sed -E 's/^violation-(r[0-9]+)-.*/\1/' | tr 'a-z' 'A-Z')"
   check_rule "$f" "$rule"

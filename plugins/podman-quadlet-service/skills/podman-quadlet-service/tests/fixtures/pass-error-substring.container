@@ -1,4 +1,5 @@
 # LIFECYCLE: daemon
+# EGRESS: test fixture, egress is not what this case tests
 # Regression fixture for the LINT guard.
 # Every value below deliberately contains the substring "error" in innocuous,
 # conformant text: the image repository name, the prose Description=, and a

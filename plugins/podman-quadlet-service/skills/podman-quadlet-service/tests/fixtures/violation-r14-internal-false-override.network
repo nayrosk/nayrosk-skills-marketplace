@@ -1,0 +1,7 @@
+[Unit]
+Description=fixture network
+
+[Network]
+NetworkName=fixture
+Internal=true
+Internal=false

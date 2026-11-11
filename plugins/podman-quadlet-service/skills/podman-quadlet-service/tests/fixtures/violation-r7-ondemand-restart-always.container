@@ -1,4 +1,5 @@
 # LIFECYCLE: on-demand
+# EGRESS: test fixture, egress is not what this case tests
 [Unit]
 StopWhenUnneeded=yes
 Description=fixture
