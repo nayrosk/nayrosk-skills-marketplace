@@ -112,7 +112,7 @@ relaxed "until it works" with no record of why.
      `public-auth`, `monitoring`, `loopback`, `internal`). Every placement
      uses the service's own `Internal=true` network (R14); a reverse proxy
      joins it, never the reverse. **Egress** only when the profile found an
-     outbound need, with a `# EGRESS: <reason>` marker. Egress is
+     outbound need, with a `# EGRESS: <what the app reaches outside, and the evidence>` marker. Egress is
      all-or-nothing: it also opens the LAN and the host.
 
 2. **Classify the lifecycle** with `references/lifecycle.md`: `daemon`,
@@ -186,7 +186,7 @@ relaxed "until it works" with no record of why.
      the file-capability case (conventions R9 note), not a broken image.
    - **Egress is earned the same way:** a failure traced to the missing
      route out (DNS or connect errors to an external host) gets the
-     evidence, a `# EGRESS: <what it reaches> - <evidence>` marker,
+     evidence, a `# EGRESS: <what the app reaches outside, and the evidence>` marker,
      re-validation, and a report to the operator.
    - Then arm the profile: `daemon` - `systemctl --user enable`; `on-demand`
      - repoint each approved client config at the wrapper (back up each
@@ -258,7 +258,9 @@ relaxed "until it works" with no record of why.
 ## Conformance
 
 `scripts/validate.sh` checks R1-R14 and runs the Quadlet generator as a
-linter. Two things need human judgement it cannot make: R10 (prefer the
-app's own JSON log format) and whether each `HARDENING-EXCEPTION` reason is
-real evidence. The validator only checks that one exists. Run
+linter. Three things need human judgement it cannot make: R10 (prefer the
+app's own JSON log format), and whether each `HARDENING-EXCEPTION` and each
+`EGRESS` reason is real evidence. The validator only checks that one
+exists. Nor can it see runtime state: whether the network a unit joins is
+really internal is checked at step 9. Run
 `bash tests/run.sh` after changing the validator.

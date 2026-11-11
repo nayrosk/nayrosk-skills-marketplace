@@ -96,7 +96,7 @@ Every unit declares when its container should exist (see
 | R11 | All paths absolute and canonical - no `~`, no `%h`, no relative paths |
 | R12 | Graceful stop: `StopTimeout=`, `TimeoutStopSec=` greater than it, `RunInit=true` (or a `# PID1:` justification); `SuccessExitStatus=` never accepts SIGKILL/137 |
 | R13 | Hardening baseline (`NoNewPrivileges`, `DropCapability=ALL`, `ReadOnly`, default seccomp/labels); each relaxation needs a keyed `# HARDENING-EXCEPTION: <Key> - <evidence>` marker; no `--privileged`/`--cap-add`/`--security-opt` |
-| R14 | No outbound network unless justified: every `Network=` is `none` or a sibling `.network` with `Internal=true`, or the unit carries an `# EGRESS: <reason>` marker; never `--network` in `PodmanArgs=` |
+| R14 | No outbound network unless justified: every `Network=` (and a `Pod=`'s own networks) is `none` or a sibling `.network` with `Internal=true` (drop-ins included, never `NetworkName=podman`), or the unit carries an `# EGRESS: <what the app reaches outside, and the evidence>` marker; never `--network`/`--net`/`--pod` in `PodmanArgs=` |
 
 See `skills/podman-quadlet-service/references/conventions.md` for the full rationale and examples behind
 each rule.

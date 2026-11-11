@@ -8,7 +8,8 @@ Description=<SERVICE_NAME> internal network
 NetworkName=<SERVICE_NAME>
 # R14: no outbound access (internet, LAN and host). Containers on this
 # network still reach each other by name, and PublishPort=127.0.0.1:...
-# still works. Removing this line requires a "# EGRESS: <reason>" marker
+# still works. Removing this line requires a "# EGRESS: <what the app reaches outside, and the evidence>"
+# marker
 # in every .container that joins the network.
 Internal=true
 # Stopping this unit's generated service (<SERVICE_NAME>-network.service)

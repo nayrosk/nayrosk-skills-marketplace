@@ -20,9 +20,11 @@ render() { # render <fixture> -> prints rendered path
   # "fixture" basename, because validate.sh resolves such references
   # relative to the unit under test.
   local sib
-  for sib in "${src%.container}".network "${src%.container}".volume; do
+  for sib in "${src%.container}".network "${src%.container}".volume "${src%.container}".pod; do
     [ -f "$sib" ] && sed "s|@HOME@|$HOME|g" "$sib" > "$dir/fixture.${sib##*.}"
   done
+  # Drop-in directories (<name>.network.d/*.conf) follow the same renaming.
+  [ -d "${src%.container}.network.d" ] && cp -r "${src%.container}.network.d" "$dir/fixture.network.d"
   echo "$dir/fixture.container"
 }
 
@@ -109,6 +111,8 @@ check "keyed HARDENING-EXCEPTION markers are honoured (R13)" 0 "$VALIDATE" "$(re
 check "internal sibling network with options passes (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-internal.container")"
 check "Network=none passes without marker (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-none.container")"
 check "EGRESS marker with reason allows a non-internal network (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-marker.container")"
+check "Internal=true set by a .network.d drop-in is honoured (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-dropin.container")"
+check "Pod= on a pod whose networks are internal passes (R14)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-egress-pod.container")"
 
 for f in "$HERE"/fixtures/violation-*.container; do
   rule="$(basename "$f" | sed -E 's/^violation-(r[0-9]+)-.*/\1/' | tr 'a-z' 'A-Z')"

@@ -438,52 +438,81 @@ done <<< "$(get_all PodmanArgs Container)"
 # egress; so do host, pasta, slirp4netns, podman, bridge, container:, ns:,
 # a bare network name, and a <x>.network that is not a sibling file (its
 # Internal= cannot be checked, e.g. an existing proxy network). Any of
-# those needs `# EGRESS: <reason>` with a non-empty reason. `:options`
+# those needs `# EGRESS: <what the app reaches outside, and the evidence>` (non-empty).
+# Sibling units are read with their drop-ins (<x>.network.d/*.conf), and
+# Pod=<x>.pod is judged by the pod's own [Pod] Network= values. `:options`
 # after the network name (Network=x.network:ip=...) are ignored.
 # The network must never be set through PodmanArgs= (invisible to this
 # check and to a reader), marker or not.
 egress_marker=0
 tr -d '\r' < "$unit" | grep -qE '^#[[:space:]]*EGRESS:[[:space:]]*[^[:space:]]' && egress_marker=1
-network_internal() { # network_internal <sibling .network file> -> exit 0 if Internal is true
-  awk '
+# unit_values <unit file> <Section> <Key> -> every value of Key in [Section],
+# reading the file then its drop-ins (<file>.d/*.conf, in name order) like
+# systemd does; a bare `Key=` resets the list. Last line = effective value.
+unit_values() {
+  local f="$1" files=("$1") d
+  for d in "$f".d/*.conf; do [ -f "$d" ] && files+=("$d"); done
+  awk -v want="[$2]" -v k="$3" '
+    FNR == 1 { section = "" }
     { line = $0; gsub(/^[ \t]+|[ \t\r]+$/, "", line) }
     line == "" || line ~ /^[#;]/ { next }
     line ~ /^\[.*\]$/ { section = line; next }
-    section == "[Network]" && line ~ /^Internal[ \t]*=/ {
-      v = line; sub(/^[^=]*=[ \t]*/, "", v); v = tolower(v)
+    section == want {
+      key = line; sub(/[ \t]*=.*/, "", key)
+      if (key != k || line !~ /=/) next
+      v = line; sub(/^[^=]*=[ \t]*/, "", v)
+      if (v == "") n = 0; else vals[++n] = v
     }
-    END { exit !(v == "1" || v == "yes" || v == "true" || v == "on") }
-  ' "$1"
+    END { for (i = 1; i <= n; i++) print vals[i] }
+  ' "${files[@]}"
 }
+is_true() { case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in 1|yes|true|on) return 0 ;; esac; return 1; }
 egress_via=()
+# judge_network <Network= value> <label> -> appends to egress_via when it
+# gives outbound access.
+judge_network() {
+  local name="${1%%:*}" label="$2" sib
+  case "$name" in
+    none) ;;
+    *.network)
+      sib="$(dirname "$unit")/$name"
+      if [ ! -f "$sib" ]; then egress_via+=("$label$name (not a sibling unit, Internal= unknown)")
+      elif ! is_true "$(unit_values "$sib" Network Internal | tail -1)"; then
+        egress_via+=("$label$name (not Internal=true)")
+      # Quadlet creates the network with `podman network create --ignore`:
+      # a NetworkName= that already exists is silently REUSED as is, so
+      # Internal=true is not applied. `podman` (the default network) always
+      # exists and is never internal. Other clashes are runtime state and
+      # are caught by the SKILL.md step 9 `podman network inspect` check.
+      elif [ "$(unit_values "$sib" Network NetworkName | tail -1)" = "podman" ]; then
+        egress_via+=("$label$name (NetworkName=podman reuses the default network)")
+      fi ;;
+    *) egress_via+=("$label$name") ;;
+  esac
+}
+# Pod= puts the container in the pod's network namespace: judge the pod's
+# own [Pod] Network= values (from a sibling <x>.pod unit) as well.
+pod="$(get_last Pod Container)"
+if [ -n "$pod" ]; then
+  podfile="$(dirname "$unit")/$pod"
+  if [ ! -f "$podfile" ]; then
+    egress_via+=("Pod=$pod (not a sibling unit, its network is unknown)")
+  else
+    podnets="$(unit_values "$podfile" Pod Network)"
+    if [ -z "$podnets" ]; then egress_via+=("Pod=$pod (no Network=, rootless default network)")
+    else while IFS= read -r net; do judge_network "$net" "Pod=$pod Network="; done <<< "$podnets"
+    fi
+  fi
+fi
 networks="$(get_all Network Container)"
 if [ -z "$networks" ]; then
-  egress_via+=("no Network= (rootless default network)")
+  [ -z "$pod" ] && egress_via+=("no Network= (rootless default network)")
 else
-  while IFS= read -r net; do
-    [ -z "$net" ] && continue
-    name="${net%%:*}"
-    case "$name" in
-      none) ;;
-      *.network)
-        sib="$(dirname "$unit")/$name"
-        if [ ! -f "$sib" ]; then egress_via+=("Network=$name (not a sibling unit, Internal= unknown)")
-        elif ! network_internal "$sib"; then egress_via+=("Network=$name (not Internal=true)")
-        # Quadlet creates the network with `podman network create --ignore`:
-        # a NetworkName= that already exists is silently REUSED as is, so
-        # Internal=true is not applied. `podman` (the default network) always
-        # exists and is never internal. Other clashes are runtime state and
-        # are caught by the SKILL.md step 9 `podman network inspect` check.
-        elif [ "$(awk -F= '/^[ \t]*NetworkName[ \t]*=/ {v=$2} END {gsub(/^[ \t]+|[ \t\r]+$/, "", v); print v}' "$sib")" = "podman" ]; then
-          egress_via+=("Network=$name (NetworkName=podman reuses the default network)")
-        fi ;;
-      *) egress_via+=("Network=$name") ;;
-    esac
-  done <<< "$networks"
+  while IFS= read -r net; do [ -n "$net" ] && judge_network "$net" "Network="; done <<< "$networks"
 fi
 if [ "$egress_marker" -eq 0 ]; then
   for via in "${egress_via[@]+"${egress_via[@]}"}"; do
-    fail R14 "$via gives outbound access without '# EGRESS: <reason>'"
+    fail R14 "$via gives outbound access without '# EGRESS: <what the app reaches outside, and the evidence>'"
   done
 fi
 while IFS= read -r val; do
@@ -512,6 +541,13 @@ if quadlet_bin="$("$HERE/find-quadlet.sh" 2>/dev/null)"; then
     [ -z "$ref" ] && continue
     [ "$ref" = "$(basename "$unit")" ] && continue
     [ -f "$unit_dir/$ref" ] && cp "$unit_dir/$ref" "$tmp/"
+    [ -d "$unit_dir/$ref.d" ] && cp -r "$unit_dir/$ref.d" "$tmp/"
+    # A .pod unit names its own networks: copy those too.
+    case "$ref" in *.pod)
+      while IFS= read -r sub; do
+        [ -n "$sub" ] && [ -f "$unit_dir/$sub" ] && cp "$unit_dir/$sub" "$tmp/"
+      done <<< "$(grep -oE '[A-Za-z0-9_.@-]+\.network\b' "$unit_dir/$ref" | sort -u)" ;;
+    esac
   done <<< "$(printf '%s\n' "$norm" | awk -F'\t' '{print $3}' \
     | grep -oE '[A-Za-z0-9_.@-]+\.(network|volume|pod|image|build|kube)\b' | sort -u)"
   # `quadlet -dryrun` writes the GENERATED UNIT BODY to stdout and its own

@@ -491,7 +491,7 @@ Unit get no outbound access by default. Conformant when **every** `Network=` is 
 # EGRESS: <what the app reaches outside, and the evidence>
 ```
 
-`:options` after network name ignored (`Network=x.network:ip=...` judged by `x.network`). Network never set through `PodmanArgs=--network`/`--net`: rejected, marker or not.
+`:options` after network name ignored (`Network=x.network:ip=...` judged by `x.network`). Sibling read with its drop-ins (`<x>.network.d/*.conf`, name order, last value win). `NetworkName=podman` never internal: Quadlet create network with `--ignore`, so existing name reused as is (other name clashes = runtime state, checked at step 9 with `podman network inspect`). `Pod=<x>.pod`: container live in pod's netns, so pod's own `[Pod]` `Network=` values judged same way (pod not sibling, or no `Network=` = egress). Network never set through `PodmanArgs=--network`/`--net`/`--pod`: rejected, marker or not.
 
 ✅ Correct
 ```ini
