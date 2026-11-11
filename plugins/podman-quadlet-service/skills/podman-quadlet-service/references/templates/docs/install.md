@@ -55,9 +55,27 @@ carries, or a compatibility constraint>
   - If no healthcheck was possible (distroless image, no shell): record the
     `# NO-HEALTHCHECK:` justification exactly as it appears in the unit,
     and repeat the reason here.
-- **Capabilities**: `NoNewPrivileges=true`, `DropCapability=ALL`,
-  `ReadOnly=true` by default - <any capability re-added, and why the
-  service cannot run without it; leave as "none" if the defaults held>.
+- **Lifecycle** (R7): `<PROFILE>` (`daemon`, `on-demand`, `socket` or
+  `job`, see `references/lifecycle.md`) - <why this profile>.
+  - on-demand: wrapper `<HOME>/.local/bin/<SERVICE_NAME>-client` (or the
+    name chosen), and every client config repointed at it (file path, and
+    the backup made before editing it).
+  - socket: public `127.0.0.1:<PUBLIC_PORT>`, backend
+    `127.0.0.1:<BACKEND_PORT>`, idle timeout `<IDLE_TIMEOUT>`, measured
+    cold start.
+  - job: `OnCalendar=<ON_CALENDAR>`, and what counts as success.
+- **Stop path** (R12): PID 1 is <catatonit via `RunInit=true` / the image's
+  own init>, `Exec=` override <yes - why / no>, `StopTimeout=<STOP_TIMEOUT>`,
+  `TimeoutStopSec=<TIMEOUT_STOP_SEC>`, measured stop time <N>s, and the stop
+  test result (`Result=success`).
+- **Hardening** (R13): baseline `NoNewPrivileges=true`, `DropCapability=ALL`,
+  `ReadOnly=true`, default seccomp. Exceptions: <one line per
+  `HARDENING-EXCEPTION` marker - key, what failed without it, how it was
+  tested, date; "none" if the baseline held>. Re-test each exception at
+  every image update and drop it once it is no longer needed.
+- **Supply chain** (R1): signature <verified with cosign (identity) / not
+  published / cosign not available>; scan <tool, CRITICAL/HIGH counts,
+  operator decision / no scanner available>.
 - **Secrets** (R4): `Secret=<SECRET_NAME>,type=env,target=<VAR_NAME>` -
   <what this secret is, without its value>.
 
@@ -72,6 +90,10 @@ carries, or a compatibility constraint>
 ## Verifying health
 
 ```bash
+# daemon / job: query the unit directly. on-demand / socket: the unit is
+# normally inactive - hold it up first, in another shell:
+#   systemd-run --user --scope -p Wants=<SERVICE_NAME>.service \
+#     -p After=<SERVICE_NAME>.service -- sleep 600
 systemctl --user is-active <SERVICE_NAME>
 podman healthcheck run <SERVICE_NAME>
 podman inspect <SERVICE_NAME> --format '{{.Config.Image}} {{.State.Health.Status}}'

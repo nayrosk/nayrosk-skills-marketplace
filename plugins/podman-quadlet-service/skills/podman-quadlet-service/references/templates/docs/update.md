@@ -26,7 +26,15 @@ sed -i "s|^Image=.*|Image=<REGISTRY>/<IMAGE>:<NEW_TAG>@sha256:<NEW_DIGEST>|" \
 <SKILL_PATH>/scripts/validate.sh \
   "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/<SERVICE_NAME>.container"
 
-# 6. Reload and restart
+# 6. Reload and restart.
+#    daemon: restart directly.
+#    on-demand / socket: a bare restart is stopped again at once by
+#    StopWhenUnneeded=yes. Hold the unit with a scope for steps 6-7, in
+#    another shell:
+#      systemd-run --user --scope -p Wants=<SERVICE_NAME>.service \
+#        -p After=<SERVICE_NAME>.service -- sleep 600
+#    job: nothing to restart; `systemctl --user start <SERVICE_NAME>` runs
+#    it once with the new image and must end with Result=success.
 systemctl --user daemon-reload
 systemctl --user restart <SERVICE_NAME>
 
@@ -57,6 +65,17 @@ fi
 systemctl --user status <SERVICE_NAME> --no-pager
 podman inspect <SERVICE_NAME> --format '{{.Config.Image}} {{.State.Health.Status}}'
 ```
+
+After a healthy result, repeat the R12 stop test - a new image can change
+the entrypoint and silently bring back SIGKILL-on-stop:
+
+```bash
+systemctl --user stop <SERVICE_NAME>
+systemctl --user show <SERVICE_NAME> -p Result,ExecMainStatus   # want Result=success
+```
+
+Re-check every `# HARDENING-EXCEPTION:` in the unit against the new
+version too: drop the ones that are no longer needed.
 
 ## Rollback
 

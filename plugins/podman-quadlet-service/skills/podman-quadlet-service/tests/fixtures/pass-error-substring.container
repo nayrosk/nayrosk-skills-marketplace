@@ -1,3 +1,4 @@
+# LIFECYCLE: daemon
 # Regression fixture for the LINT guard.
 # Every value below deliberately contains the substring "error" in innocuous,
 # conformant text: the image repository name, the prose Description=, and a
@@ -9,8 +10,14 @@
 Description=fixture error-tracking service
 
 [Container]
+HealthOnFailure=kill
+RunInit=true
+StopTimeout=10
+NoNewPrivileges=true
+DropCapability=ALL
+ReadOnly=true
 ContainerName=fixture
-Image=ghcr.io/getsentry/errortracker:1.2.3
+Image=ghcr.io/getsentry/errortracker:1.2.3@sha256:0000000000000000000000000000000000000000000000000000000000000001
 Pull=missing
 UserNS=keep-id:uid=1000,gid=1000
 EnvironmentFile=@HOME@/.fixture/.env
@@ -28,6 +35,7 @@ PodmanArgs=--cpus=1.0
 LogDriver=journald
 
 [Service]
+TimeoutStopSec=25
 Restart=always
 RestartSec=10
 

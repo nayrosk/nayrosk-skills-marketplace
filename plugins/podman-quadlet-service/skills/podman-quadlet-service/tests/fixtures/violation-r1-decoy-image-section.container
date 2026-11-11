@@ -1,9 +1,16 @@
+# LIFECYCLE: daemon
 [Unit]
 Description=fixture
 
 [Container]
+HealthOnFailure=kill
+RunInit=true
+StopTimeout=10
+NoNewPrivileges=true
+DropCapability=ALL
+ReadOnly=true
 ContainerName=fixture
-Image=docker.io/library/alpine:latest
+Image=docker.io/library/alpine:latest@sha256:0000000000000000000000000000000000000000000000000000000000000001
 Pull=missing
 UserNS=keep-id:uid=1000,gid=1000
 EnvironmentFile=@HOME@/.fixture/.env
@@ -21,7 +28,8 @@ PodmanArgs=--cpus=1.0
 LogDriver=journald
 
 [Service]
-Image=docker.io/library/alpine:3.20
+TimeoutStopSec=25
+Image=docker.io/library/alpine:3.20@sha256:0000000000000000000000000000000000000000000000000000000000000001
 Restart=always
 RestartSec=10
 

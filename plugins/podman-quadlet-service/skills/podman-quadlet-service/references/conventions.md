@@ -1,6 +1,6 @@
 # Conventions
 
-Eleven conventions. Every Quadlet unit from this skill must follow. Each rule got stable ID (`R1`..`R11`). `scripts/validate.sh` use ID as violation prefix (e.g. `R1: ...`). Conformance checklist in `SKILL.md` use too. IDs never renumbered, merged, reused.
+Thirteen conventions. Every Quadlet unit from this skill must follow. Each rule got stable ID (`R1`..`R13`). `scripts/validate.sh` use ID as violation prefix (e.g. `R1: ...`). Conformance checklist in `SKILL.md` use too. IDs never renumbered, merged, reused.
 
 Examples below use `%HOME%` as stand-in for user home dir: `%HOME%` mean value of `$HOME`, resolved to absolute path at generation time. Quadlet own `%h` specifier deliberately **not** used anywhere in generated units - R11 forbid it, plus `~` and any other relative or unresolved path form.
 
@@ -16,23 +16,40 @@ Repo use different token for home dir in each kind of file. All mean same thing 
 
 One mistake to avoid: write `%HOME%` into generated unit. Not systemd specifier, so systemd not expand - Quadlet pass literal string `%HOME%/...` through as path, mount fail. `%`-delimited form look like `%h`, which R11 forbid for own reasons; `%HOME%` not that either. When generating from template, token to find and replace is `<HOME>`.
 
-## R1 - Pinned image version
+## R1 - Pinned image, by tag AND digest
 
-Always pin explicit version. Upstream publish no semver → pin digest.
+`Image=` carries a human-readable tag **and** the manifest digest:
+`<registry>/<image>:<tag>@sha256:<digest>`. The tag tells a reader what
+version runs. The digest is what Podman actually resolves, and it cannot be
+re-pointed upstream.
 
 ✅ Correct
 ```ini
-Image=docker.io/library/postgres:16.4
-Image=ghcr.io/example/app@sha256:0f7a...c21
+Image=docker.io/library/postgres:16.4@sha256:0f7a...c21
 ```
 
 ❌ Incorrect
 ```ini
+Image=docker.io/library/postgres:16.4        # tag only: mutable, can be re-pushed
 Image=docker.io/library/postgres:latest
 Image=docker.io/library/postgres
+Image=ghcr.io/example/app@sha256:0f7a...c21  # digest only: unreadable in review
 ```
 
-Why: `latest` turn restart into uncontrolled upgrade. Unit must state exactly what run.
+Why: tags are mutable pointers. A compromised or careless upstream push to
+an existing tag changes what runs on the next pull, and `Pull=missing` (R6)
+only delays that to the next image prune. The digest makes the unit state
+exactly which bytes run, and the tag keeps it reviewable.
+
+Supply-chain checks at research time (workflow step 1) build on this
+pin. They are not linted, because the tools are optional:
+- **Signature**: if upstream publishes sigstore/cosign signatures and
+  `cosign` is present, run `cosign verify` against the digest with the
+  identity upstream documents. A failed verification is a gate blocker. If
+  there is no signature, say so at the gate rather than staying silent.
+- **Vulnerabilities**: if `trivy` or `grype` is present, scan the pinned
+  digest and report CRITICAL/HIGH counts at the gate, with fixed-in
+  versions. The operator decides, and the decision goes in `install.md`.
 
 ## R2 - Rootless UID/GID mapping
 
@@ -118,6 +135,17 @@ Only exception: distroless image with no shell and no suitable binary to run che
 
 `<reason>` = short, specific justification (example: which base image used, why no alternative check command exist). Not placeholder left unfilled.
 
+Profile-dependent healthcheck keys (`references/lifecycle.md`), when a
+`HealthCmd=` exists:
+
+| Profile | Required | Why |
+|---|---|---|
+| `daemon` | `HealthOnFailure=kill` | a healthcheck nobody acts on only changes a status string; `kill` hands the wedged container to `Restart=always` |
+| `on-demand`, `socket` | `Notify=healthy` | the unit counts as "started" only once healthy, so consumers ordered `After=` it never hit a cold port |
+
+The `job` profile normally has no healthcheck: use the marker
+`# NO-HEALTHCHECK: job - <what proves success>`.
+
 ## R6 - Explicit pull policy, no auto-update
 
 `Pull=missing` stated explicitly, so restart never re-pull image already present locally. `AutoUpdate=` absent: image upgrade = deliberate reviewed action (re-pin tag or digest per R1), not background process.
@@ -135,24 +163,48 @@ AutoUpdate=registry
 
 Why: unattended image swap defeat point of pinning version in R1.
 
-## R7 - Restart policy
+## R7 - Lifecycle profile and matching restart policy
 
-`[Service]` section set `Restart=always` with explicit `RestartSec=`, so unit come back after crash or host reboot, no unbounded restart-loop churn.
+Unit declares exactly one lifecycle profile on a comment line, and its
+`[Unit]`/`[Service]`/`[Install]` match that profile. Full decision guide:
+`references/lifecycle.md`.
 
-✅ Correct
 ```ini
+# LIFECYCLE: daemon | on-demand | socket | job
+```
+
+| Profile | `[Service] Restart=` | `RestartSec=` | `[Unit] StopWhenUnneeded=yes` | `[Install]` |
+|---|---|---|---|---|
+| `daemon` | `always` | required | forbidden | `WantedBy=default.target` required |
+| `on-demand` | `on-failure` | required | required | forbidden |
+| `socket` | `on-failure` | required | required | forbidden |
+| `job` | `no` or `on-failure` | if `on-failure` | forbidden | forbidden (the `.timer` is enabled) |
+
+✅ Correct (on-demand)
+```ini
+# LIFECYCLE: on-demand
+[Unit]
+StopWhenUnneeded=yes
 [Service]
-Restart=always
+Restart=on-failure
 RestartSec=10
 ```
 
-❌ Incorrect
+❌ Incorrect - on-demand backend shaped like a daemon
 ```ini
 [Service]
-Restart=on-failure
+Restart=always
+[Install]
+WantedBy=default.target
 ```
 
-Why: `always` also cover exit code 0 (container exit cleanly but should still run). `RestartSec=` stop hot crash-loop hammering host.
+Why: `Restart=always` on an on-demand backend turns every stop that is not
+issued through systemd (a `podman stop`, an OOM kill, a SIGKILL after a
+missed stop timeout) into a respawn, and `WantedBy=default.target` starts
+it at every login whether anything needs it or not. Conversely,
+`StopWhenUnneeded=yes` on a daemon stops it the moment nothing depends on
+it, which is immediately. The profile is declared explicitly so a reviewer
+and the linter both know which shape is intended.
 
 ## R8 - Bind-mounted, absolute, per-service storage
 
@@ -185,6 +237,30 @@ PodmanArgs=--mount type=bind,source=/etc,destination=/host-etc
 ```
 
 Why: rule inspecting only `Volume=` trivially bypassed by writing same bind mount another way. All three spellings end as same `podman run` argument.
+
+### External mounts (cross-service, operator-chosen destinations)
+
+A service sometimes has a legitimate need for a path outside its own tree,
+typically a `job` backing up another service or writing to a folder the
+operator chose. That is allowed only behind a marker naming the **exact**
+host path, one marker per path:
+
+```ini
+# EXTERNAL-MOUNT: %HOME%/.uptime-kuma/data - nightly backup source
+Volume=%HOME%/.uptime-kuma/data:/src:ro,z
+# EXTERNAL-MOUNT: %HOME%/backups - backup destination chosen by the operator
+Volume=%HOME%/backups:/dst:Z
+```
+
+Hard limits that no marker lifts (`scripts/validate.sh` enforces them):
+
+- the path stays under `%HOME%`, and is never `%HOME%` itself;
+- never a credential or client-config store: `.ssh`, `.gnupg`, `.config`,
+  `.local`, `.password-store`, `.kube`, `.aws`, `.docker`, `.claude`;
+- another service's tree (any other `%HOME%/.<name>/...`) is mounted
+  read-only (`:ro`, or `ro`/`readonly` in `Mount=`);
+- `--volumes-from` in `PodmanArgs=` is rejected like `-v`: it imports
+  every mount of another container wholesale and bypasses all of the above.
 
 ## R9 - Resource limits
 
@@ -225,18 +301,29 @@ exec container process `/usr/bin/<binary>`: Operation not permitted
 Common for web servers built to bind ports below 1024 (`cap_net_bind_service=ep` on entrypoint binary). Happen even when container never asked to bind privileged port. Check image before blaming it:
 
 ```bash
-podman run --rm --entrypoint /bin/sh <REGISTRY>/<IMAGE>:<TAG> \
-  -c 'getcap /usr/bin/<binary>'
+# same --userns= as the unit (hosts defaulting to userns=auto may otherwise
+# fail with "not enough unused IDs"); scan the whole image, not just the
+# entrypoint:
+podman run --rm --userns=keep-id --entrypoint /bin/sh <REGISTRY>/<IMAGE>@sha256:<DIGEST> \
+  -c 'getcap -r / 2>/dev/null || echo "no getcap in image"'
 ```
+
+Capabilities on **helper** binaries fail differently: the container runs,
+but one feature breaks silently (e.g. `/usr/bin/ping` with `cap_net_raw=ep`
+behind an "ICMP monitor" option). List them at the gate as "feature X
+needs capability Y". Add the capability only if the operator needs that
+feature, behind a marker, and only after testing.
 
 Then add back only capability it name, with comment saying why:
 
 ```ini
 DropCapability=ALL
-# /usr/bin/<binary> carries cap_net_bind_service=ep; an empty bounding set
-# makes exec fail with EPERM before the process starts.
+# HARDENING-EXCEPTION: AddCapability - /usr/bin/<binary> carries
+# cap_net_bind_service=ep; an empty bounding set makes exec fail with EPERM.
 AddCapability=NET_BIND_SERVICE
 ```
+
+R13 requires the `# HARDENING-EXCEPTION: AddCapability` marker.
 
 Note: diagnosis need `journalctl --user -u <SERVICE_NAME>`, not `podman logs` - container already removed by time failure visible.
 
@@ -274,3 +361,118 @@ Volume=./data:/data:Z
 ```
 
 Why: `~` and `%h` expanded by different layers (shell vs systemd specifier resolution) at different times. Relative paths depend on generator current working dir. Canonical absolute path unambiguous no matter who read unit.
+
+## R12 - Graceful, observable stop
+
+A stop issued by systemd must reach the application as SIGTERM, finish
+within a stated budget, and end with `Result=success`. A container that is
+always SIGKILLed loses in-flight writes, leaves lock files behind, and
+reports exit 137, which `Restart=` policies count as a failure.
+
+Required:
+
+- `StopTimeout=<seconds>` in `[Container]`: the grace period podman gives
+  between the stop signal and SIGKILL. Size it from the application's real
+  shutdown time, measured, not guessed.
+- `TimeoutStopSec=` in `[Service]`, **strictly greater** than
+  `StopTimeout=` (the Podman man page says why: otherwise systemd kills
+  `podman rm` itself mid-stop). Rule of thumb: `StopTimeout + 15`.
+- `RunInit=true`, **or** a marker justifying why PID 1 already handles
+  signals: `# PID1: <entrypoint> - <why it forwards SIGTERM and reaps>`
+  (e.g. the image already ships `tini`, `dumb-init` or `s6-overlay` as
+  entrypoint).
+- `SuccessExitStatus=` may list `143` (SIGTERM) for applications that have
+  no SIGTERM handler and die from the default action. It **never** lists
+  `137`/`SIGKILL`/`KILL`: that would hide the exact failure this rule exists
+  to catch.
+
+✅ Correct
+```ini
+[Container]
+Exec=node --max-old-space-size=256 server.js   # exec form: no sh in front
+RunInit=true
+StopTimeout=30
+[Service]
+TimeoutStopSec=45
+```
+
+❌ Incorrect
+```ini
+[Container]
+# image CMD is `sh -c "node server.js"`, left as is, no RunInit
+[Service]
+SuccessExitStatus=137
+```
+
+Why: the kernel ignores every signal for which PID 1 of a PID namespace has
+not installed a handler. Images whose `CMD`/`ENTRYPOINT` is a shell form
+(`sh -c ...`) put a shell at PID 1 that neither handles nor forwards
+SIGTERM, so `podman stop` always waits out the timeout and SIGKILLs. Check
+at research time:
+
+```bash
+podman image inspect <IMAGE>@sha256:<DIGEST> \
+  --format 'entrypoint={{json .Config.Entrypoint}} cmd={{json .Config.Cmd}} stopsignal={{.Config.StopSignal}}'
+```
+
+If the effective command starts with `sh -c`/`bash -c` (also via an
+entrypoint script that does not `exec "$@"`), override it with `Exec=` in
+exec form. Shell expansion is gone then, so copy expanded values from
+`.env` and comment the duplication. Add `RunInit=true`: catatonit becomes
+PID 1, forwards SIGTERM, and reaps orphaned grandchildren (browsers,
+workers).
+
+**Mandatory stop test** (workflow step 9), from a running, healthy unit.
+For `on-demand`/`socket`, hold it up first with the scope from
+`references/lifecycle.md`, because a bare `start` is stopped again at once:
+
+```bash
+systemctl --user stop <SERVICE_NAME>
+systemctl --user show <SERVICE_NAME> -p Result,ExecMainStatus
+# PASS: Result=success. FAIL: ExecMainStatus=137, or Result=timeout.
+journalctl --user -u <SERVICE_NAME> -n 30 --no-pager   # time from "Stopping" to "Stopped"
+```
+
+## R13 - Hardened by default, every relaxation justified and tested
+
+The unit keeps the hardening baseline below. Any relaxation is allowed
+only with a marker comment naming the exact key, written after the
+relaxation was **tested** to be necessary (state what failed without it):
+
+```ini
+# HARDENING-EXCEPTION: <Key> - <what broke without it, how it was tested>
+```
+
+| Baseline | Relaxation that needs a marker |
+|---|---|
+| `NoNewPrivileges=true` | absent or `false` → marker `NoNewPrivileges` |
+| `DropCapability=ALL` | absent → marker `DropCapability`; any `AddCapability=` → marker `AddCapability` |
+| `ReadOnly=true` | absent or `false` → marker `ReadOnly` |
+| default seccomp | `SeccompProfile=unconfined` → marker `SeccompProfile` |
+| SELinux labels on | `SecurityLabelDisable=true` → marker `SecurityLabelDisable` |
+| no privilege flags | `--privileged`, `--cap-add`, `--security-opt` in `PodmanArgs=` are rejected outright, with or without a marker: use the native keys so the marker rule can see them |
+
+✅ Correct
+```ini
+NoNewPrivileges=true
+DropCapability=ALL
+# HARDENING-EXCEPTION: ReadOnly - Firefox writes /etc, /root and /var/cache/fontconfig
+# at startup; tested 2026-11-10, times out without them.
+Tmpfs=/tmp:rw,size=256m,noexec,nosuid,nodev
+```
+
+❌ Incorrect
+```ini
+SeccompProfile=unconfined      # no marker: nobody can tell if this is still needed
+PodmanArgs=--privileged
+```
+
+With `ReadOnly=true`, give the app writable scratch through
+`Tmpfs=<path>:rw,size=<n>,noexec,nosuid,nodev` (size-bounded, no exec)
+rather than relaxing `ReadOnly`.
+
+Why: every relaxation widens the blast radius of an application compromise.
+A marker turns a silent default into a reviewed decision that names its
+evidence, so a later image bump can re-test it and drop the exception. The
+marker must name the key, so one generic comment cannot cover several
+relaxations.

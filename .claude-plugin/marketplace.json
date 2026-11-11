@@ -9,8 +9,8 @@
   "plugins": [
     {
       "name": "podman-quadlet-service",
-      "description": "Install a containerized service as a rootless Podman Quadlet systemd unit, with a conformance linter and generated runbooks.",
-      "version": "1.0.0",
+      "description": "Install a containerized service as a rootless Podman Quadlet systemd unit with a deliberate lifecycle (daemon, on-demand, socket, job), graceful stop and hardened-by-default security, with a conformance linter and generated runbooks.",
+      "version": "2.0.0",
       "author": {
         "name": "Nayrosk",
         "url": "https://github.com/nayrosk"

@@ -5,6 +5,22 @@ removing its unit, remove the unit before reloading systemd, and remove the
 secret and image only after the unit that used them is gone.
 
 ```bash
+# Lifecycle companions first, so nothing can start the container again
+# while it is being removed (references/lifecycle.md). Keep only the block
+# for this service's profile.
+#   socket:
+systemctl --user disable --now <SERVICE_NAME>-proxy.socket
+systemctl --user stop <SERVICE_NAME>-proxy.service 2>/dev/null || true
+rm "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/<SERVICE_NAME>-proxy.socket" \
+   "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/<SERVICE_NAME>-proxy.service"
+#   job:
+systemctl --user disable --now <SERVICE_NAME>.timer
+rm "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/<SERVICE_NAME>.timer"
+#   on-demand: restore each client config from the backup recorded in
+#   install.md (or remove its entry), THEN delete the wrapper. A client
+#   still pointing at a missing wrapper fails to launch.
+rm "<HOME>/.local/bin/<SERVICE_NAME>-client"
+
 systemctl --user stop <SERVICE_NAME>
 systemctl --user disable <SERVICE_NAME> 2>/dev/null || true
 rm "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd/<SERVICE_NAME>.container"

@@ -51,21 +51,35 @@ own based on the request. The workflow stops at an approval gate, presenting
 the proposed image, version, network placement, volumes and resource limits,
 before writing anything to disk.
 
+## Lifecycle profiles
+
+Every unit declares when its container should exist (see
+`skills/podman-quadlet-service/references/lifecycle.md`):
+
+| Profile | For | Shape |
+|---|---|---|
+| `daemon` | always-up services (web apps, databases, proxies) | `Restart=always`, `WantedBy=default.target`, `HealthOnFailure=kill` |
+| `on-demand` | backends of local client processes (MCP servers, IDE helpers) | `StopWhenUnneeded=yes`, clients launched through a `systemd-run --scope` wrapper that refcounts the container |
+| `socket` | sporadically used network services | systemd `.socket` + `systemd-socket-proxyd --exit-idle-time`, container stops when idle |
+| `job` | run-to-completion work | `Type=oneshot` + `.timer` |
+
 ## What it enforces
 
 | Rule | Requirement |
 |---|---|
-| R1 | `Image=` carries an explicit version tag or digest; `latest` and untagged are rejected |
+| R1 | `Image=<image>:<tag>@sha256:<digest>`: readable tag **and** immutable digest; `latest`, tag-only and digest-only are rejected |
 | R2 | `UserNS=keep-id` (or `keep-id:uid=N,gid=N`) present |
 | R3 | Zero `Environment=` lines; non-secret variables come from `EnvironmentFile=` |
 | R4 | Secrets only via `Secret=<name>,type=env,target=VAR` or `type=mount,target=/path` |
-| R5 | `HealthCmd=` present with interval/timeout/retries/start-period, unless justified with a `# NO-HEALTHCHECK:` comment |
+| R5 | `HealthCmd=` with interval/timeout/retries/start-period (or a `# NO-HEALTHCHECK:` justification); `daemon` adds `HealthOnFailure=kill`, `on-demand`/`socket` add `Notify=healthy` |
 | R6 | `Pull=missing` stated explicitly; `AutoUpdate=` absent |
-| R7 | `[Service] Restart=always` with `RestartSec=` |
-| R8 | Every `Volume=` host path is absolute and under `$HOME/.<SERVICE_NAME>/`; no named volumes, no `.volume` units |
+| R7 | A `# LIFECYCLE: daemon\|on-demand\|socket\|job` declaration, with matching `Restart=`, `StopWhenUnneeded=` and `[Install]` |
+| R8 | Every `Volume=`/`Mount=` host path is absolute and under `$HOME/.<SERVICE_NAME>/`, or named by an `# EXTERNAL-MOUNT:` marker (inside `$HOME`, never a credential store, other services' trees read-only); no named volumes, no `--volumes-from` |
 | R9 | Resource limits present: `Memory=`, `PidsLimit=`, `PodmanArgs=--cpus=` |
 | R10 | JSON logging preferred via the application's own option; otherwise `LogDriver=` set explicitly |
 | R11 | All paths absolute and canonical - no `~`, no `%h`, no relative paths |
+| R12 | Graceful stop: `StopTimeout=`, `TimeoutStopSec=` greater than it, `RunInit=true` (or a `# PID1:` justification); `SuccessExitStatus=` never accepts SIGKILL/137 |
+| R13 | Hardening baseline (`NoNewPrivileges`, `DropCapability=ALL`, `ReadOnly`, default seccomp/labels); each relaxation needs a keyed `# HARDENING-EXCEPTION: <Key> - <evidence>` marker; no `--privileged`/`--cap-add`/`--security-opt` |
 
 See `skills/podman-quadlet-service/references/conventions.md` for the full rationale and examples behind
 each rule.
@@ -89,7 +103,7 @@ Exit codes:
 
 Exit 1 uses two line prefixes, and both are real failures:
 
-- `R<n>: <message>` - a convention violation (R1..R11)
+- `R<n>: <message>` - a convention violation (R1..R13)
 - `LINT: <message>` - the Quadlet generator itself rejected the unit
 
 Grepping only for `^R[0-9]` silently misses every `LINT:` failure. Match both:

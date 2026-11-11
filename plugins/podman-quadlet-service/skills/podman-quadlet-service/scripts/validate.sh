@@ -4,7 +4,7 @@
 # Exit 0 when conformant ("conformant" is printed).
 # Exit 1 otherwise, with one diagnostic line per problem, on two possible
 # prefixes:
-#   "R<n>: <message>"  - a convention violation (R1..R11, references/conventions.md)
+#   "R<n>: <message>"  - a convention violation (R1..R13, references/conventions.md)
 #   "LINT: <message>"  - the Quadlet generator itself rejected the unit
 # A consumer that only greps "^R[0-9]+:" will miss LINT failures; match
 # "^(R[0-9]+|LINT):" to see every reason for a non-zero exit.
@@ -108,25 +108,41 @@ get_last() { get_all "$1" "${2:-}" | tail -1; }
 # is not a decoy - it really lands in the generated unit. Those two checks
 # stay file-wide on purpose; do not scope them to [Container].
 
-# R1 - pinned image (last [Container] Image= wins; tag matched exactly,
-# case-insensitively)
+# R1 - pinned image: tag AND digest (last [Container] Image= wins; tag
+# matched exactly, case-insensitively). Digest-only and tag-only both fail.
 image="$(get_last Image Container)"
 if [ -z "$image" ]; then
   fail R1 "no Image= directive"
-elif printf '%s' "$image" | grep -qE '@sha256:[0-9a-f]{64}$'; then
-  : # pinned by digest - any trailing tag text is irrelevant
 else
-  after_slash="${image##*/}"
+  digest_ok=0
+  printf '%s' "$image" | grep -qE '@sha256:[0-9a-f]{64}$' && digest_ok=1
+  ref="${image%@*}"
+  after_slash="${ref##*/}"
   case "$after_slash" in
     *:*) tag="${after_slash##*:}" ;;
     *)   tag="" ;;
   esac
   if [ -z "$tag" ]; then
-    fail R1 "image is not pinned to a tag or digest: $image"
+    fail R1 "image has no readable tag (want <image>:<tag>@sha256:<digest>): $image"
   elif [ "$(printf '%s' "$tag" | tr '[:upper:]' '[:lower:]')" = "latest" ]; then
     fail R1 "image uses the latest tag: $image"
   fi
+  [ "$digest_ok" -eq 1 ] || fail R1 "image is not pinned to a sha256 digest (tags are mutable): $image"
 fi
+
+# Lifecycle profile (references/lifecycle.md), declared on a comment line.
+# Read from the raw file like the NO-HEALTHCHECK marker. Used by R5 and R7.
+profiles="$(tr -d '\r' < "$unit" | sed -nE 's/^#[[:space:]]*LIFECYCLE:[[:space:]]*([a-z-]+)[[:space:]]*$/\1/p')"
+profile=""
+case "$(printf '%s\n' "$profiles" | grep -c .)" in
+  0) fail R7 "missing '# LIFECYCLE: daemon|on-demand|socket|job' declaration" ;;
+  1) profile="$profiles"
+     case "$profile" in
+       daemon|on-demand|socket|job) : ;;
+       *) fail R7 "unknown LIFECYCLE profile: $profile"; profile="" ;;
+     esac ;;
+  *) fail R7 "more than one LIFECYCLE declaration" ;;
+esac
 
 # R2 - userns mapping
 printf '%s' "$(get_last UserNS Container)" | grep -q 'keep-id' || fail R2 "missing UserNS=keep-id"
@@ -158,37 +174,104 @@ else
   done
 fi
 
+# R5 (continued) - profile-dependent healthcheck wiring
+if [ -n "$(get_last HealthCmd Container)" ]; then
+  case "$profile" in
+    daemon)
+      [ "$(get_last HealthOnFailure Container)" = "kill" ] \
+        || fail R5 "daemon profile needs HealthOnFailure=kill, or the healthcheck triggers nothing" ;;
+    on-demand|socket)
+      [ "$(get_last Notify Container)" = "healthy" ] \
+        || fail R5 "$profile profile needs Notify=healthy so consumers never hit a cold port" ;;
+  esac
+fi
+
 # R6 - explicit pull policy, no auto-update
 [ "$(get_last Pull Container)" = "missing" ] || fail R6 "missing explicit Pull=missing"
 [ -z "$(get_all AutoUpdate Container)" ] || fail R6 "AutoUpdate= contradicts a pinned image"
 
-# R7 - restart policy. Restart=/RestartSec= only take effect in [Service];
-# the same key name in another section is inert, so it must be checked
-# section-scoped rather than anywhere in the file.
-[ "$(get_last Restart Service)" = "always" ] || fail R7 "missing [Service] Restart=always"
-[ -n "$(get_last RestartSec Service)" ] || fail R7 "missing RestartSec="
+# R7 - restart policy and unit shape must match the declared profile.
+# Restart=/RestartSec= only take effect in [Service], StopWhenUnneeded= in
+# [Unit]; the same key in another section is inert, so lookups are scoped.
+restart="$(get_last Restart Service)"
+stop_unneeded="$(get_last StopWhenUnneeded Unit)"
+has_install=0
+printf '%s\n' "$norm" | awk -F'\t' '$1=="Install"{f=1} END{exit !f}' && has_install=1
+wanted_default=0
+get_all WantedBy Install | tr ' ' '\n' | grep -qx 'default.target' && wanted_default=1
+is_yes() { case "$1" in yes|true|on|1) return 0 ;; *) return 1 ;; esac; }
+case "$profile" in
+  daemon)
+    [ "$restart" = "always" ] || fail R7 "daemon profile needs [Service] Restart=always"
+    [ -n "$(get_last RestartSec Service)" ] || fail R7 "missing RestartSec="
+    is_yes "$stop_unneeded" && fail R7 "daemon profile must not set StopWhenUnneeded=yes"
+    [ "$wanted_default" -eq 1 ] || fail R7 "daemon profile needs [Install] WantedBy=default.target"
+    ;;
+  on-demand|socket)
+    [ "$restart" = "on-failure" ] || fail R7 "$profile profile needs [Service] Restart=on-failure (always respawns after every out-of-band stop)"
+    [ -n "$(get_last RestartSec Service)" ] || fail R7 "missing RestartSec="
+    is_yes "$stop_unneeded" || fail R7 "$profile profile needs [Unit] StopWhenUnneeded=yes"
+    [ "$has_install" -eq 0 ] || fail R7 "$profile profile must not have an [Install] section (it would start at login)"
+    ;;
+  job)
+    case "$restart" in
+      ""|no) : ;;
+      on-failure) [ -n "$(get_last RestartSec Service)" ] || fail R7 "missing RestartSec=" ;;
+      *) fail R7 "job profile needs Restart=no or on-failure, got: $restart" ;;
+    esac
+    is_yes "$stop_unneeded" && fail R7 "job profile must not set StopWhenUnneeded=yes"
+    [ "$has_install" -eq 0 ] || fail R7 "job profile must not have an [Install] section (enable its .timer instead)"
+    ;;
+esac
 
 # R8 - bind mounts inside this service's tree only. Each host path is
 # canonicalized with `realpath -m` (no existence required) before the
 # prefix test, so a `..` segment cannot walk the mount out of the tree.
 canon_tree="$(realpath -m -- "$tree")"
-check_host_path() { # check_host_path <host> <description-for-error>
-  local host="$1" what="$2" canon_host
+# External mounts: a host path outside the service tree is allowed only when
+# a marker names that exact path (compared canonically), it stays inside
+# $HOME but is not $HOME itself nor a credential/config store, and - when it
+# is another service's tree - it is mounted read-only.
+#   # EXTERNAL-MOUNT: <absolute host path> - <why this service needs it>
+canon_home="$(realpath -m -- "$HOME")"
+external_marked() { # external_marked <canonical path>
+  tr -d '\r' < "$unit" \
+    | sed -nE 's/^#[[:space:]]*EXTERNAL-MOUNT:[[:space:]]*(\/[^[:space:]]*)[[:space:]]+-[[:space:]]+[^[:space:]].*/\1/p' \
+    | while IFS= read -r m; do [ "$(realpath -m -- "$m")" = "$1" ] && echo yes && break; done | grep -q yes
+}
+check_host_path() { # check_host_path <host> <description-for-error> <is-readonly 0|1>
+  local host="$1" what="$2" ro="${3:-0}" canon_host
   case "$host" in
     /*)
       canon_host="$(realpath -m -- "$host")"
       case "$canon_host" in
-        "$canon_tree"/*) : ;;
-        *) fail R8 "$what outside $tree: $host (resolves to $canon_host)" ;;
+        "$canon_tree"/*) return ;;
+      esac
+      if ! external_marked "$canon_host"; then
+        fail R8 "$what outside $tree without '# EXTERNAL-MOUNT: $canon_host - <reason>': $host"
+        return
+      fi
+      case "$canon_host" in
+        "$canon_home") fail R8 "$what mounts the whole home directory: $host"; return ;;
+        "$canon_home"/*) : ;;
+        *) fail R8 "$what outside \$HOME, even with a marker: $host"; return ;;
+      esac
+      case "${canon_host#"$canon_home"/}" in
+        .ssh|.ssh/*|.gnupg|.gnupg/*|.config|.config/*|.local|.local/*|.password-store|.password-store/*|.kube|.kube/*|.aws|.aws/*|.docker|.docker/*|.claude|.claude/*)
+          fail R8 "$what exposes a credential/config store, never allowed: $host"; return ;;
+        .*/*|.*)
+          [ "$ro" -eq 1 ] || fail R8 "$what is another service's tree and must be mounted read-only (:ro): $host" ;;
       esac
       ;;
     *) fail R8 "$what is a named volume or non-absolute path: $host" ;;
   esac
 }
-
 while IFS= read -r val; do
   [ -z "$val" ] && continue
-  check_host_path "${val%%:*}" "bind mount"
+  vopts=""
+  case "$val" in *:*:*) vopts="${val##*:}" ;; esac
+  vro=0; printf '%s' ",$vopts," | grep -q ',ro,' && vro=1
+  check_host_path "${val%%:*}" "bind mount" "$vro"
 done <<< "$(get_all Volume Container)"
 
 # R8 (continued) - Mount= is the long-form spelling of a bind mount
@@ -200,7 +283,8 @@ while IFS= read -r val; do
   [ -z "$val" ] && continue
   src="$(printf '%s\n' "$val" | tr ',' '\n' | sed -nE 's/^(source|src)=//p' | tail -1)"
   [ -z "$src" ] && continue
-  check_host_path "$src" "Mount= source"
+  mro=0; printf '%s' ",$val," | grep -qE ',(ro|readonly)(=true)?,' && mro=1
+  check_host_path "$src" "Mount= source" "$mro"
 done <<< "$(get_all Mount Container)"
 
 # PodmanArgs= is the one directive Quadlet actually tokenizes/unquotes
@@ -220,7 +304,7 @@ dequote() { printf '%s' "$1" | tr -d "\"'"; }
 while IFS= read -r val; do
   [ -z "$val" ] && continue
   dq="$(dequote "$val")"
-  printf '%s' "$dq" | grep -qE -- '(^|[[:space:]])(-v([[:space:]=]|[^[:space:]]|$)|--volume([[:space:]=]|$)|--mount([[:space:]=]|$))' \
+  printf '%s' "$dq" | grep -qE -- '(^|[[:space:]])(-v([[:space:]=]|[^[:space:]]|$)|--volume([[:space:]=]|$)|--mount([[:space:]=]|$)|--volumes-from([[:space:]=]|$))' \
     && fail R8 "PodmanArgs= smuggles a bind mount, use Volume= instead: $val"
 done <<< "$(get_all PodmanArgs Container)"
 
@@ -291,6 +375,61 @@ while IFS= read -r val; do
     *) fail R11 "EnvironmentFile= is not an absolute path: $val" ;;
   esac
 done <<< "$(get_all EnvironmentFile Container)"
+
+# R12 - graceful, observable stop
+to_usec() { # to_usec <systemd timespan> -> microseconds, or empty if unparsable
+  local v="$1"
+  case "$v" in ''|*[!0-9a-z\ .]*) return ;; esac
+  case "$v" in *[!0-9]*) : ;; *) v="${v}s" ;; esac  # bare number = seconds
+  # Line 2 of `systemd-analyze timespan` is the microsecond count ("μs: N").
+  systemd-analyze timespan "$v" 2>/dev/null | sed -n 2p | grep -oE '[0-9]+$'
+}
+stop_timeout="$(get_last StopTimeout Container)"
+stop_sec="$(get_last TimeoutStopSec Service)"
+if [ -z "$stop_timeout" ]; then
+  fail R12 "missing StopTimeout= (grace period before SIGKILL)"
+elif ! printf '%s' "$stop_timeout" | grep -qE '^[0-9]+$'; then
+  fail R12 "StopTimeout= must be a whole number of seconds: $stop_timeout"
+fi
+if [ -z "$stop_sec" ]; then
+  fail R12 "missing [Service] TimeoutStopSec= (must exceed StopTimeout=)"
+elif [ -n "$stop_timeout" ] && printf '%s' "$stop_timeout" | grep -qE '^[0-9]+$'; then
+  a="$(to_usec "$stop_sec")"
+  if [ -z "$a" ]; then
+    fail R12 "TimeoutStopSec= is not a parsable timespan: $stop_sec"
+  elif [ "$a" -le $((stop_timeout * 1000000)) ]; then
+    fail R12 "TimeoutStopSec=$stop_sec must be greater than StopTimeout=$stop_timeout"
+  fi
+fi
+if [ "$(get_last RunInit Container)" != "true" ] && ! grep -qE '^#[[:space:]]*PID1:[[:space:]]*[^[:space:]].* - [^[:space:]]' "$unit"; then
+  fail R12 "no RunInit=true and no '# PID1: <entrypoint> - <reason>' justification"
+fi
+while IFS= read -r val; do
+  [ -z "$val" ] && continue
+  for tok in $val; do
+    case "$(printf '%s' "$tok" | tr '[:lower:]' '[:upper:]')" in
+      137|SIGKILL|KILL) fail R12 "SuccessExitStatus= must never accept SIGKILL (137): $val" ;;
+    esac
+  done
+done <<< "$(get_all SuccessExitStatus Service)"
+
+# R13 - hardening baseline; each relaxation needs a marker naming its key:
+#   # HARDENING-EXCEPTION: <Key> - <tested reason>
+exceptions="$(tr -d '\r' < "$unit" | sed -nE 's/^#[[:space:]]*HARDENING-EXCEPTION:[[:space:]]*([A-Za-z]+)[[:space:]]+-[[:space:]]+[^[:space:]].*/\1/p')"
+excepted() { printf '%s\n' "$exceptions" | grep -qx "$1"; }
+need_exc() { excepted "$1" || fail R13 "$2 without '# HARDENING-EXCEPTION: $1 - <reason>'"; }
+[ "$(get_last NoNewPrivileges Container)" = "true" ] || need_exc NoNewPrivileges "NoNewPrivileges=true missing"
+get_all DropCapability Container | tr ' ' '\n' | grep -qix 'all' || need_exc DropCapability "DropCapability=ALL missing"
+[ -n "$(get_all AddCapability Container)" ] && need_exc AddCapability "AddCapability= present"
+[ "$(get_last ReadOnly Container)" = "true" ] || need_exc ReadOnly "ReadOnly=true missing"
+[ "$(get_last SeccompProfile Container)" = "unconfined" ] && need_exc SeccompProfile "SeccompProfile=unconfined"
+[ "$(get_last SecurityLabelDisable Container)" = "true" ] && need_exc SecurityLabelDisable "SecurityLabelDisable=true"
+while IFS= read -r val; do
+  [ -z "$val" ] && continue
+  dq="$(dequote "$val")"
+  printf '%s' "$dq" | grep -qE -- '(^|[[:space:]])--(privileged|cap-add|security-opt)([[:space:]=]|$)' \
+    && fail R13 "PodmanArgs= must not carry --privileged/--cap-add/--security-opt, use native keys: $val"
+done <<< "$(get_all PodmanArgs Container)"
 
 # The Quadlet generator must accept the unit.
 # -user is a boolean flag: a positional directory argument is silently ignored

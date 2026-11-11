@@ -92,6 +92,18 @@ check "an innocuous \"error\" substring in the unit body is not a LINT failure" 
 # skill itself generates.
 check "a referenced sibling .network unit is resolved, not a LINT failure" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-network-ref.container")"
 
+# Lifecycle profiles (R5/R7), graceful stop (R12) and hardening markers
+# (R13): each valid shape must pass, so the rules cannot drift into
+# rejecting the very units references/lifecycle.md tells the agent to write.
+check "on-demand profile shape is conformant (R7)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-on-demand.container")"
+check "socket profile shape is conformant (R7)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-socket.container")"
+check "job profile with NO-HEALTHCHECK marker is conformant (R5/R7)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-job.container")"
+check "PID1 justification replaces RunInit=true (R12)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-pid1-marker.container")"
+check "SuccessExitStatus=143 is accepted (R12)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-success-143.container")"
+check "TimeoutStopSec= in minutes is parsed (R12)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-timespan-minutes.container")"
+check "EXTERNAL-MOUNT markers allow scoped cross-tree mounts (R8)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-external-mount.container")"
+check "keyed HARDENING-EXCEPTION markers are honoured (R13)" 0 "$VALIDATE" "$(render "$HERE/fixtures/pass-hardening-exceptions.container")"
+
 for f in "$HERE"/fixtures/violation-*.container; do
   rule="$(basename "$f" | sed -E 's/^violation-(r[0-9]+)-.*/\1/' | tr 'a-z' 'A-Z')"
   check_rule "$f" "$rule"

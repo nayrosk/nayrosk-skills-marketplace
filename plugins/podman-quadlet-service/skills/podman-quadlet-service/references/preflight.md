@@ -14,12 +14,28 @@ Quadlet generator never referenced by literal path (lives in different places ac
 |---|---|---|---|
 | Podman version | `podman --version` | version `>= 5.0` | **ABORT** - name found version and required minimum (5.0) |
 | Rootless id mappings | `podman info --format '{{.Host.IDMappings.UIDMap}}'` | non-empty mapping | **ABORT** - subuid/subgid not configured for this user |
-| Linger | `loginctl show-user "$USER" -p Linger` | `Linger=yes` | **ASK** before running `loginctl enable-linger "$USER"`; without linger service stop when user log out |
+| Linger | `loginctl show-user "$USER" -p Linger` | `Linger=yes` | `daemon` profile only (decided in step 1, see "Profile-gated checks"): **ASK** before running `loginctl enable-linger "$USER"`; without linger, service stops when user logs out. Other profiles: **INFO** only |
 | Quadlet unit dir | see "Unit directory writability" below | dir (or parent, if not yet created) writable | not abort - **CREATE** with `mkdir -p` when missing; **ABORT** if writability probe fail |
 | Quadlet generator | `scripts/find-quadlet.sh` (from skill dir) | print absolute path on stdout, exit 0 | **ABORT** - exit 1 mean neither `.container` generation nor linting possible; report script stderr diagnostic |
 | systemd user manager | see "systemd user manager" below | stdout exactly `running` or `degraded` | **ABORT** - stdout anything else, including empty (connection failure to user bus) |
 | Cgroups version | `podman info --format '{{.Host.CgroupsVersion}}'` | `v2` | **WARN** - see "Cgroups v1 and resource limits" below; R9 limits not enforced |
 | Free space | `df -h --output=avail "$HOME" \| tail -1` | enough free space for image and its data | **WARN** and ask operator whether to continue if space look insufficient for service being installed |
+
+## Profile-gated checks
+
+Some checks depend on the lifecycle profile (`references/lifecycle.md`),
+which is only known after workflow step 1. Run them right after
+classification, **before** the approval gate. They change nothing
+persistent (the scope probe is a transient unit, gone when it exits).
+
+| Profile | Check | Command | Expected | On failure |
+|---|---|---|---|---|
+| `daemon` | Linger | see table above | `Linger=yes` | **ASK** |
+| `on-demand` | Transient scopes | `systemd-run --user --scope --quiet -p Wants=preflight-probe.service true` | exit 0 | **ABORT** - the wrapper cannot refcount the container; propose `socket` or `daemon` instead |
+| `socket` | systemd version | `systemctl --version \| head -1` | `>= 246` (`--exit-idle-time=`) | **ABORT** for `socket`; propose `on-demand` or `daemon` |
+| `socket` | Socket proxy | `for p in /usr/lib/systemd/systemd-socket-proxyd /lib/systemd/systemd-socket-proxyd; do [ -x "$p" ] && echo "$p" && break; done` | absolute path printed | **ABORT** for `socket`; the printed path fills `<SOCKET_PROXYD>` |
+| `socket` | Port free | `ss -Hltn "sport = :<PUBLIC_PORT>"` and same for `<BACKEND_PORT>` | empty output | **ABORT** - name the listener (`ss -Hltnp`) |
+| any | Supply-chain tools | `command -v cosign trivy grype` | any subset | **INFO** - list what exists; workflow step 1 uses them when present, never installs them |
 
 ## Unit directory writability
 
